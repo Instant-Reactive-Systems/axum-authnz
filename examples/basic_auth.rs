@@ -1,3 +1,4 @@
+/*
 use axum::{async_trait, extract::Request, response::Response, routing::get, Router};
 use axum_authnz::{AuthSessionBackend, AuthSessionLayer, AuthStateChange, AuthenticationProof};
 use base64::Engine;
@@ -100,7 +101,7 @@ impl<AuthnProof: AuthenticationProof + 'static> axum_authnz::AuthSessionBackend<
         }
 
         type User = AuthenticationProof;
-        
+
         let session_manager = self.session_manager;
 
         let session_id = request.cookies.get("session_id").unwrap();
@@ -128,7 +129,7 @@ async fn main() {
 
     // build our application with a single route
     let app = Router::new()
-        // ovaj layer je applyan ne sve routeove, al ne pruza nikakav protection nego samo extraction Usera 
+        // ovaj layer je applyan ne sve routeove, al ne pruza nikakav protection nego samo extraction Usera
         .layer(ServiceBuilder::new().layer(AuthSessionLayer::<
             IRSAuthenticationProof,
             CookieAuthSessionBackend>::new(auth_session_backend)
@@ -136,7 +137,7 @@ async fn main() {
             .layer(IRSAuthenticationLayer)
         )
         .route("/", get(|| async { "Hello, World!" }))
-        .route("/protected_route", get(|| async { "Protected"})).layer(AuthorizationLayer::new().login_required().failed_response(redirect))
+        .route("/protected_route", get(|| async { "Protected"})).layer(AuthorizationLayer::new().login_required().predicate(|user, authorization_backend| some_bool).has_permission("permission").unauthorized_response(redirect))
         .route("/unprotected_route", get(|user: Option<User>, authorzation_service: AuthoriationService| {
             if user.is_none() || !user.unwrap().has_permission("read:books"){
                 return 401
@@ -157,7 +158,7 @@ req -> AuthSessionService -> calls AuthSessionBackend.extract_authentication_pro
 
 
 // Flow za protected routeove, pretpostavljamo da user postoji
-1. req 
+1. req
 2. AuthSessionService
 3. AuthSessionService.backend.extract_authentication_proof() -> AuthenticationProof u request extensionioma
 4. AuthenicationService
@@ -175,7 +176,7 @@ req -> AuthSessionService -> calls AuthSessionBackend.extract_authentication_pro
 5. AuthenticationService.backend.authenticate() -> User u request extensionioma
     - ako nema authenticationproofa nikom nista idemo dalje
     - ako je user authenticated -> inserta User u extension
-    - ako nije ne inserta 
+    - ako nije ne inserta
     - u praksi jedino sta bi trebalo bit od errora je Internal Server Error ak negdje pukne u extractanju usera
 6. Finalni handler /login
     pub fn handler(credentials: Credentials, user: Option<User>, auth_service: AuthenticationService) -> {
@@ -198,3 +199,116 @@ req -> AuthSessionService -> calls AuthSessionBackend.extract_authentication_pro
      - session auth dobije kao authentication neki user id i setta session cookie i spremi u bazu
      - jwt auth dobije jwt token token i setta ga u headeru
      - keycloak cookie auth dobije keycloak id/access token i setta ga u private signed cookiejima
+
+
+*/
+
+use axum::{http::header, response::IntoResponse, routing::get, Router};
+use axum_authnz::{authentication::AuthProof, transform::AuthProofTransformer};
+use base64::Engine;
+use thiserror::Error;
+use tower::ServiceBuilder;
+use std::io::Read;
+
+#[derive(Debug, Clone)]
+struct BasicAuthProof {
+    username: String,
+    password: String
+}
+
+#[derive(Error, Debug, Clone)]
+pub enum BasicAuthProofParseError{
+    #[error("invalid authentication type")]
+    InvalidAuthenticationType,
+    #[error("invalid authentication value")]
+    InvalidAuthenticationValue,
+    #[error("missing passsword")]
+    MissingPassword,
+    #[error("invalid header encoding")]
+    InvalidHeaderEncoding // Do we need this?
+}
+
+
+impl AuthProof for BasicAuthProof {
+    type Error = BasicAuthProofParseError;
+
+    fn from_bytes(bytes: axum::body::Bytes) -> Result<Self, Self::Error> {
+        let header_value: String = String::from_utf8(bytes.to_vec()).map_err(|_| BasicAuthProofParseError::InvalidHeaderEncoding)?;
+
+        let split = header_value.split_once(' ');
+
+        match split {
+            Some((name, contents)) if name == "Basic" => {
+                let decoded: Vec<u8> = base64::engine::general_purpose::STANDARD
+                    .decode(contents)
+                    .map_err(|_| BasicAuthProofParseError::InvalidAuthenticationValue)?;
+
+                let decoded = String::from_utf8(decoded).map_err(|_| BasicAuthProofParseError::InvalidAuthenticationValue)?;
+
+                // Return depending on if password is present
+                if let Some((id, password)) = decoded.split_once(':') {
+                    Ok(BasicAuthProof {
+                        username: id.to_string(),
+                        password: password.to_string(),
+                    })
+                } else {
+                    Err(BasicAuthProofParseError::MissingPassword)
+                }
+            }
+            _ => Err(BasicAuthProofParseError::InvalidAuthenticationType),
+        }
+    }
+}
+
+ 
+
+#[derive(Debug, Clone)]
+pub struct HeaderAuthProofTransformer{
+    header: String
+}
+
+
+impl HeaderAuthProofTransformer {
+    pub fn new(header: String) -> Self {
+        Self {
+            header
+        }
+    }
+}
+
+impl AuthProofTransformer<HeaderAuthProofTransformer> for HeaderAuthProofTransformer {
+    type Error = ()
+
+    /// Inserts [crate::authentication::AuthProof] into the request and returns the modified request with [crate::authentication::AuthProof]
+    /// inserted into extensions
+    ///
+    /// Refer to [https://github.com/tokio-rs/axum/blob/main/examples/consume-body-in-extractor-or-middleware/src/main.rs]
+    async fn insert_auth_proof(&mut self, request: Request) -> Result<Request, Self::Error>;
+
+    /// Receives and handles [crate::authentication::AuthStateChange] in response extensions
+    ///
+    /// For example for session based auth and the LoggedIn event we would insert a new session and return the modified response which contains the session id
+    /// [crate::authentication::AuthProof] into it so we can identify the user on new requests
+    async fn process_auth_state_change(
+        &mut self,
+        response: Response,
+    ) -> Result<Response, Self::Error>;
+}
+
+
+
+async fn root() -> impl IntoResponse {
+    format!("Hello world!")
+}
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new().route("/", get(root))
+        .route_layer(
+            ServiceBuilder::new()
+                .layer()
+        )
+    // run our app with hyper, listening globally on port 3000
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}

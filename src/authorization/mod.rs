@@ -1,9 +1,8 @@
-use std::collections::HashSet;
-
 use axum::{async_trait, response::IntoResponse};
 
 pub mod backends;
 
+/// Represents a backend for authorization
 #[async_trait]
 pub trait AuthorizationBackend: std::fmt::Debug + Clone + Send + Sync {
     type Error: std::error::Error + Send + Sync + IntoResponse;
@@ -15,8 +14,7 @@ pub trait AuthorizationBackend: std::fmt::Debug + Clone + Send + Sync {
     async fn authorize(
         &self,
         user: Option<&Self::User>,
-        perm: Option<Self::Permission>
+        perm: Option<Self::Permission>,
     ) -> Result<bool, Self::Error>;
-
 }
 
