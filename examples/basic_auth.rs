@@ -203,6 +203,7 @@ req -> AuthSessionService -> calls AuthSessionBackend.extract_authentication_pro
 
 */
 
+use std::convert::Infallible;
 use std::{collections::HashMap, io::Read};
 
 use axum::body::Bytes;
@@ -215,7 +216,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use axum_authnz::authentication::AuthenticationService;
+use axum_authnz::authentication::{self, AuthManagerLayer, AuthUser, AuthenticationService};
 use axum_authnz::{
     authentication::{AuthProof, AuthStateChange, AuthenticationBackend},
     transform::{AuthProofTransformer, AuthProofTransformerLayer, AuthProofTransformerService},
@@ -306,7 +307,7 @@ struct User {
 impl AuthenticationBackend for DummyAuthenticationBackend {
     type AuthProof = BasicAuthProof;
     type Credentials = (); // Not used since we do not have login/logout as auth is stateless
-    type Error = AuthenticationError;
+    type Error = Infallible;
     type User = User;
 
     /// Logs in user
@@ -334,31 +335,17 @@ impl AuthenticationBackend for DummyAuthenticationBackend {
     async fn authenticate(
         &mut self,
         auth_proof: Self::AuthProof,
-    ) -> Result<Self::User, Self::Error> {
-        self.users
+    ) -> Result<AuthUser<Self::User>, Self::Error> {
+        let result = self.users
             .get(&auth_proof)
-            .cloned()
-            .ok_or(AuthenticationError::InvalidCredentials)
+            .map_or_else(
+                || Ok(AuthUser::Unaunthenticated),
+                |user| Ok(AuthUser::Authenticated(user.clone())),
+            );
+        
+        println!("result");
+        result
     }
-}
-
-impl IntoResponse for AuthenticationError {
-    fn into_response(self) -> Response {
-        #[derive(Serialize)]
-        struct ErrorResponse {
-            message: String,
-        }
-
-        Json(ErrorResponse {
-            message: self.to_string(),
-        })
-        .into_response()
-    }
-}
-#[derive(Error, Debug)]
-pub enum AuthenticationError {
-    #[error("invalid credentials provided")]
-    InvalidCredentials,
 }
 
 #[derive(Debug, Clone)]
@@ -370,7 +357,7 @@ struct DummyAuthenticationBackend {
 impl<AuthnProof: AuthProof + 'static> AuthProofTransformer<AuthnProof>
     for HeaderAuthProofTransformer
 {
-    type Error = ();
+    type Error = Infallible;
 
     /// Inserts [crate::authentication::AuthProof] into the request and returns the modified request with [crate::authentication::AuthProof]
     /// inserted into extensions
@@ -381,12 +368,12 @@ impl<AuthnProof: AuthProof + 'static> AuthProofTransformer<AuthnProof>
             let auth_proof = AuthnProof::from_bytes(Bytes::copy_from_slice(header.as_bytes()));
             match auth_proof {
                 Ok(auth_proof) => {
+                    println!("{:?}", auth_proof);
                     request.extensions_mut().insert(auth_proof);
-
                     Ok(request)
                 }
                 Err(err) => {
-                    // log error
+                    println!("{:?}", err);
                     Ok(request)
                 }
             }
@@ -407,9 +394,15 @@ impl<AuthnProof: AuthProof + 'static> AuthProofTransformer<AuthnProof>
     }
 }
 
-async fn root(user: Extension<User>) -> impl IntoResponse {
-    println!("{:?}", user);
-    format!("Hello world!")
+async fn root(user: AuthUser<User>) -> impl IntoResponse {
+    match user {
+        AuthUser::Authenticated(user) => {
+            format!("Hello user: {}", user.id)
+        },
+        AuthUser::Unaunthenticated => {
+            format!("Hello anonymous one")
+        }
+    }
 }
 
 #[tokio::main]
@@ -425,9 +418,9 @@ async fn main() {
                 BasicAuthProof,
                 HeaderAuthProofTransformer,
             >::new(HeaderAuthProofTransformer::new(
-                "header".into(),
+                "Authorization".into(),
             )))
-            .layer(AuthenticationService::new(authentication_backend)),
+            .layer(AuthManagerLayer::new(authentication_backend)),
     );
 
     // run our app with hyper, listening globally on port 3000
