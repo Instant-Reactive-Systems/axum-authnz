@@ -13,4 +13,5 @@ tower = "0.4.13"
 
 [dev-dependencies]
 anyhow = "1.0.86"
+serde = { version = "1.0.204", features = ["derive"] }
 thiserror = "1.0.62"

@@ -20,7 +20,7 @@ pub mod backends;
 /// For oauth this is the access token
 /// For session based auth is used only to identify the user
 pub trait AuthProof: std::fmt::Debug + Clone + Send + Sync + 'static {
-    type Error;
+    type Error: std::error::Error;
 
     fn from_bytes(bytes: Bytes) -> Result<Self, Self::Error>;
 }
@@ -30,6 +30,24 @@ pub trait AuthProof: std::fmt::Debug + Clone + Send + Sync + 'static {
 pub enum AuthStateChange<T: AuthProof> {
     LoggedIn(T),
     LoggedOut(T),
+}
+
+#[derive(Debug, Clone)]
+pub enum AuthUser<User> {
+    Authenticated(User),
+    Unaunthenticated,
+}
+
+#[async_trait]
+impl<User: Send + Sync + Clone + 'static, S> FromRequestParts<S> for AuthUser<User> {
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts.extensions.get::<AuthUser<User>>().cloned().ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Can't extract authentication service. Is AuthenticationServiceLayer enabled?",
+        ))
+    }
 }
 
 impl<T: AuthProof> IntoResponseParts for AuthStateChange<T> {
@@ -72,12 +90,18 @@ pub trait AuthenticationBackend: std::fmt::Debug + Clone + Send + Sync {
     async fn authenticate(
         &mut self,
         auth_proof: Self::AuthProof,
-    ) -> Result<Self::User, Self::Error>;
+    ) -> Result<AuthUser<Self::User>, Self::Error>;
 }
 
 #[derive(Debug, Clone)]
 pub struct AuthenticationService<Backend: AuthenticationBackend> {
     backend: Backend,
+}
+
+impl<Backend: AuthenticationBackend> AuthenticationService<Backend> {
+    pub fn new(backend: Backend) -> Self {
+        Self { backend }
+    }
 }
 
 impl<Backend: AuthenticationBackend> AuthenticationService<Backend> {
@@ -105,7 +129,7 @@ impl<Backend: AuthenticationBackend> AuthenticationService<Backend> {
     async fn authenticate(
         &mut self,
         auth_proof: Backend::AuthProof,
-    ) -> Result<Backend::User, Backend::Error> {
+    ) -> Result<AuthUser<Backend::User>, Backend::Error> {
         self.backend.authenticate(auth_proof).await
     }
 }

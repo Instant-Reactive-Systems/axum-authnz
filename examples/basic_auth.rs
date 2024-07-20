@@ -203,21 +203,45 @@ req -> AuthSessionService -> calls AuthSessionBackend.extract_authentication_pro
 
 */
 
-use axum::{http::header, response::IntoResponse, routing::get, Router};
-use axum_authnz::{authentication::AuthProof, transform::AuthProofTransformer};
+use std::{collections::HashMap, io::Read};
+
+use axum::body::Bytes;
+use axum::Extension;
+use axum::{
+    async_trait,
+    extract::Request,
+    http::header,
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
+use axum_authnz::authentication::AuthenticationService;
+use axum_authnz::{
+    authentication::{AuthProof, AuthStateChange, AuthenticationBackend},
+    transform::{AuthProofTransformer, AuthProofTransformerLayer, AuthProofTransformerService},
+};
 use base64::Engine;
+use serde::Serialize;
 use thiserror::Error;
 use tower::ServiceBuilder;
-use std::io::Read;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BasicAuthProof {
     username: String,
-    password: String
+    password: String,
+}
+
+impl BasicAuthProof {
+    pub fn new(username: impl Into<String>, password: impl Into<String>) -> Self {
+        BasicAuthProof {
+            username: username.into(),
+            password: password.into(),
+        }
+    }
 }
 
 #[derive(Error, Debug, Clone)]
-pub enum BasicAuthProofParseError{
+pub enum BasicAuthProofParseError {
     #[error("invalid authentication type")]
     InvalidAuthenticationType,
     #[error("invalid authentication value")]
@@ -225,25 +249,27 @@ pub enum BasicAuthProofParseError{
     #[error("missing passsword")]
     MissingPassword,
     #[error("invalid header encoding")]
-    InvalidHeaderEncoding // Do we need this?
+    InvalidHeaderEncoding, // Do we need this?
 }
-
 
 impl AuthProof for BasicAuthProof {
     type Error = BasicAuthProofParseError;
 
     fn from_bytes(bytes: axum::body::Bytes) -> Result<Self, Self::Error> {
-        let header_value: String = String::from_utf8(bytes.to_vec()).map_err(|_| BasicAuthProofParseError::InvalidHeaderEncoding)?;
+        let header_value: String = String::from_utf8(bytes.to_vec())
+            .map_err(|_| BasicAuthProofParseError::InvalidHeaderEncoding)?;
 
         let split = header_value.split_once(' ');
 
         match split {
             Some((name, contents)) if name == "Basic" => {
-                let decoded: Vec<u8> = base64::engine::general_purpose::STANDARD
-                    .decode(contents)
-                    .map_err(|_| BasicAuthProofParseError::InvalidAuthenticationValue)?;
+                let decoded: Vec<u8> =
+                    base64::engine::general_purpose::STANDARD
+                        .decode(contents)
+                        .map_err(|_| BasicAuthProofParseError::InvalidAuthenticationValue)?;
 
-                let decoded = String::from_utf8(decoded).map_err(|_| BasicAuthProofParseError::InvalidAuthenticationValue)?;
+                let decoded = String::from_utf8(decoded)
+                    .map_err(|_| BasicAuthProofParseError::InvalidAuthenticationValue)?;
 
                 // Return depending on if password is present
                 if let Some((id, password)) = decoded.split_once(':') {
@@ -260,30 +286,114 @@ impl AuthProof for BasicAuthProof {
     }
 }
 
- 
-
 #[derive(Debug, Clone)]
-pub struct HeaderAuthProofTransformer{
-    header: String
+pub struct HeaderAuthProofTransformer {
+    header: String,
 }
-
 
 impl HeaderAuthProofTransformer {
     pub fn new(header: String) -> Self {
-        Self {
-            header
-        }
+        Self { header }
     }
 }
 
-impl AuthProofTransformer<HeaderAuthProofTransformer> for HeaderAuthProofTransformer {
-    type Error = ()
+#[derive(Debug, Clone)]
+struct User {
+    id: u128,
+}
+
+#[async_trait]
+impl AuthenticationBackend for DummyAuthenticationBackend {
+    type AuthProof = BasicAuthProof;
+    type Credentials = (); // Not used since we do not have login/logout as auth is stateless
+    type Error = AuthenticationError;
+    type User = User;
+
+    /// Logs in user
+    ///
+    /// Should be called in login route handlers and returned in response to propagate changes to transform layer
+    async fn login(
+        &mut self,
+        // ili requset: direkt
+        _credentials: Self::Credentials,
+    ) -> Result<AuthStateChange<Self::AuthProof>, Self::Error> {
+        unimplemented!()
+    }
+
+    /// Logs out user
+    ///
+    /// Should be called in logout route handlers and returned in response to propagate changes to transform layer.
+    async fn logout(
+        &mut self,
+        auth_proof: Self::AuthProof,
+    ) -> Result<AuthStateChange<Self::AuthProof>, Self::Error> {
+        unimplemented!()
+    }
+
+    /// Verifies [crate::authentication::AuthProof] and returns the authenticated user
+    async fn authenticate(
+        &mut self,
+        auth_proof: Self::AuthProof,
+    ) -> Result<Self::User, Self::Error> {
+        self.users
+            .get(&auth_proof)
+            .cloned()
+            .ok_or(AuthenticationError::InvalidCredentials)
+    }
+}
+
+impl IntoResponse for AuthenticationError {
+    fn into_response(self) -> Response {
+        #[derive(Serialize)]
+        struct ErrorResponse {
+            message: String,
+        }
+
+        Json(ErrorResponse {
+            message: self.to_string(),
+        })
+        .into_response()
+    }
+}
+#[derive(Error, Debug)]
+pub enum AuthenticationError {
+    #[error("invalid credentials provided")]
+    InvalidCredentials,
+}
+
+#[derive(Debug, Clone)]
+struct DummyAuthenticationBackend {
+    pub users: HashMap<BasicAuthProof, User>,
+}
+
+#[async_trait]
+impl<AuthnProof: AuthProof + 'static> AuthProofTransformer<AuthnProof>
+    for HeaderAuthProofTransformer
+{
+    type Error = ();
 
     /// Inserts [crate::authentication::AuthProof] into the request and returns the modified request with [crate::authentication::AuthProof]
     /// inserted into extensions
     ///
     /// Refer to [https://github.com/tokio-rs/axum/blob/main/examples/consume-body-in-extractor-or-middleware/src/main.rs]
-    async fn insert_auth_proof(&mut self, request: Request) -> Result<Request, Self::Error>;
+    async fn insert_auth_proof(&mut self, mut request: Request) -> Result<Request, Self::Error> {
+        if let Some(header) = request.headers().get(&self.header) {
+            let auth_proof = AuthnProof::from_bytes(Bytes::copy_from_slice(header.as_bytes()));
+            match auth_proof {
+                Ok(auth_proof) => {
+                    request.extensions_mut().insert(auth_proof);
+
+                    Ok(request)
+                }
+                Err(err) => {
+                    // log error
+                    Ok(request)
+                }
+            }
+        } else {
+            Ok(request)
+        }
+    }
 
     /// Receives and handles [crate::authentication::AuthStateChange] in response extensions
     ///
@@ -292,22 +402,34 @@ impl AuthProofTransformer<HeaderAuthProofTransformer> for HeaderAuthProofTransfo
     async fn process_auth_state_change(
         &mut self,
         response: Response,
-    ) -> Result<Response, Self::Error>;
+    ) -> Result<Response, Self::Error> {
+        Ok(response)
+    }
 }
 
-
-
-async fn root() -> impl IntoResponse {
+async fn root(user: Extension<User>) -> impl IntoResponse {
+    println!("{:?}", user);
     format!("Hello world!")
 }
 
 #[tokio::main]
 async fn main() {
-    let app = Router::new().route("/", get(root))
-        .route_layer(
-            ServiceBuilder::new()
-                .layer()
-        )
+    let mut users = HashMap::new();
+    users.insert(BasicAuthProof::new("username", "password"), User { id: 0 });
+
+    let authentication_backend = DummyAuthenticationBackend { users };
+
+    let app = Router::new().route("/", get(root)).route_layer(
+        ServiceBuilder::new()
+            .layer(AuthProofTransformerLayer::<
+                BasicAuthProof,
+                HeaderAuthProofTransformer,
+            >::new(HeaderAuthProofTransformer::new(
+                "header".into(),
+            )))
+            .layer(AuthenticationService::new(authentication_backend)),
+    );
+
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();

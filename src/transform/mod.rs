@@ -126,7 +126,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct AuthSessionLayer<AuthnProof, Backend>
+pub struct AuthProofTransformerLayer<AuthnProof, Backend>
 where
     AuthnProof: AuthProof,
     Backend: AuthProofTransformer<AuthnProof>,
@@ -135,7 +135,7 @@ where
     _marker: PhantomData<AuthnProof>,
 }
 
-impl<AuthnProof, Backend> AuthSessionLayer<AuthnProof, Backend>
+impl<AuthnProof, Backend> AuthProofTransformerLayer<AuthnProof, Backend>
 where
     AuthnProof: AuthProof,
     Backend: AuthProofTransformer<AuthnProof>,
@@ -148,7 +148,7 @@ where
     }
 }
 
-impl<S, AuthnProof, Backend> Layer<S> for AuthSessionLayer<AuthnProof, Backend>
+impl<S, AuthnProof, Backend> Layer<S> for AuthProofTransformerLayer<AuthnProof, Backend>
 where
     AuthnProof: AuthProof,
     Backend: AuthProofTransformer<AuthnProof>,
