@@ -1,8 +1,5 @@
 use std::{
-    convert::Infallible,
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
+    collections::{HashMap, HashSet}, convert::Infallible, future::Future, pin::Pin, task::{Context, Poll}
 };
 
 use axum::{
@@ -67,12 +64,20 @@ impl<T: AuthProof> IntoResponseParts for AuthStateChange<T> {
     }
 }
 
+
+pub trait User {
+    fn roles(&self) -> HashSet<String> {
+        HashSet::new()
+    }
+}
+
+
 #[async_trait]
 pub trait AuthenticationBackend: std::fmt::Debug + Clone + Send + Sync {
     type AuthProof: AuthProof;
     type Credentials: Send + Sync;
     type Error: std::error::Error + Send + Sync + IntoResponse;
-    type User: Send + Sync + Clone;
+    type User: Send + Sync + Clone + User;
 
     /// Logs in user
     ///

@@ -216,7 +216,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use axum_authnz::authentication::{self, AuthManagerLayer, AuthUser, AuthenticationService};
+use axum_authnz::authentication::{self, AuthManagerLayer, AuthUser, AuthenticationService, User};
 use axum_authnz::{
     authentication::{AuthProof, AuthStateChange, AuthenticationBackend},
     transform::{AuthProofTransformer, AuthProofTransformerLayer, AuthProofTransformerService},
@@ -299,16 +299,19 @@ impl HeaderAuthProofTransformer {
 }
 
 #[derive(Debug, Clone)]
-struct User {
+struct MyUser {
     id: u128,
 }
 
+impl User for MyUser {
+
+}
 #[async_trait]
 impl AuthenticationBackend for DummyAuthenticationBackend {
     type AuthProof = BasicAuthProof;
     type Credentials = (); // Not used since we do not have login/logout as auth is stateless
     type Error = Infallible;
-    type User = User;
+    type User = MyUser;
 
     /// Logs in user
     ///
@@ -350,7 +353,7 @@ impl AuthenticationBackend for DummyAuthenticationBackend {
 
 #[derive(Debug, Clone)]
 struct DummyAuthenticationBackend {
-    pub users: HashMap<BasicAuthProof, User>,
+    pub users: HashMap<BasicAuthProof, MyUser>,
 }
 
 #[async_trait]
@@ -394,7 +397,7 @@ impl<AuthnProof: AuthProof + 'static> AuthProofTransformer<AuthnProof>
     }
 }
 
-async fn root(user: AuthUser<User>) -> impl IntoResponse {
+async fn root(user: AuthUser<MyUser>) -> impl IntoResponse {
     match user {
         AuthUser::Authenticated(user) => {
             format!("Hello user: {}", user.id)
@@ -408,7 +411,7 @@ async fn root(user: AuthUser<User>) -> impl IntoResponse {
 #[tokio::main]
 async fn main() {
     let mut users = HashMap::new();
-    users.insert(BasicAuthProof::new("username", "password"), User { id: 0 });
+    users.insert(BasicAuthProof::new("username", "password"), MyUser { id: 0 });
 
     let authentication_backend = DummyAuthenticationBackend { users };
 
