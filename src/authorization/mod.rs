@@ -1,10 +1,23 @@
-use std::{collections::HashSet, marker::PhantomData};
+use std::{
+    collections::HashSet,
+    future::Future,
+    marker::PhantomData,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
-use axum::{async_trait, http::request::Parts, response::IntoResponse};
+use axum::{
+    async_trait,
+    extract::Request,
+    http::request::Parts,
+    response::{IntoResponse, Response},
+    RequestExt,
+};
 use backends::{
     and_authorization_backend::AndAuthorizationBackend,
     or_authorization_backend::OrAuthorizationBackend,
 };
+use tower::{Layer, Service};
 
 use crate::authentication::User;
 
@@ -31,7 +44,7 @@ pub struct AuthorizationBuilder<U: User + Send + Sync, B: AuthorizationBackend<U
 }
 
 impl<U: User + Send + Sync, B1: AuthorizationBackend<U>> AuthorizationBuilder<U, B1> {
-    pub fn new(self, authorization_backend: B1) -> Self {
+    pub fn new(authorization_backend: B1) -> Self {
         AuthorizationBuilder {
             authorization_backend,
             _marker: PhantomData,
@@ -64,8 +77,8 @@ impl<U: User + Send + Sync, B1: AuthorizationBackend<U>> AuthorizationBuilder<U,
         }
     }
 
-    pub fn build(self) -> AuthorizationService<U, B1> {
-        AuthorizationService {
+    pub fn build(self) -> AuthorizationLayer<U, B1> {
+        AuthorizationLayer {
             authorization_backend: self.authorization_backend,
             _marker: PhantomData,
         }
@@ -73,7 +86,101 @@ impl<U: User + Send + Sync, B1: AuthorizationBackend<U>> AuthorizationBuilder<U,
 }
 
 #[derive(Debug, Clone)]
-pub struct AuthorizationService<U: User + Send + Sync, B: AuthorizationBackend<U>> {
+pub struct AuthorizationService<S, U: User + Send + Sync, B: AuthorizationBackend<U>> {
+    inner: S,
     authorization_backend: B,
     _marker: PhantomData<U>,
+}
+
+impl<U, B> AuthorizationLayer<U, B>
+where
+    B: AuthorizationBackend<U>,
+    U: User + Send + Sync,
+{
+    pub fn new(backend: B) -> Self {
+        Self {
+            authorization_backend: backend,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<S, U, B> AuthorizationService<S, U, B>
+where
+    B: AuthorizationBackend<U>,
+    U: User + Send + Sync,
+{
+    pub fn new(service: S, backend: B) -> Self {
+        Self {
+            inner: service,
+            authorization_backend: backend,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<S, U, B> Service<Request> for AuthorizationService<S, U, B>
+where
+    S: Service<Request, Response = Response> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+    U: User + Send + Sync + 'static,
+    B: AuthorizationBackend<U> + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    #[inline]
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: Request) -> Self::Future {
+        let mut backend = self.authorization_backend.clone();
+
+        // Because the inner service can panic until ready, we need to ensure we only
+        // use the ready service.
+        //
+        // See: https://docs.rs/tower/latest/tower/trait.Service.html#be-careful-when-cloning-inner-services
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
+
+        Box::pin(async move {
+            let (parts, body) = req.into_parts(); // TODO: Check if there is a better way
+
+            let authorized = match backend.authorize(&parts).await {
+                Ok(authorized) => authorized,
+                Err(err) => return Ok(err.into_response()),
+            };
+
+            if !authorized {
+                let mut response = Response::default();
+                *response.status_mut() = axum::http::StatusCode::UNAUTHORIZED;
+                return Ok(response);
+            }
+
+            let req = Request::from_parts(parts, body);
+
+            let resp = inner.call(req).await?;
+            Ok(resp)
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthorizationLayer<U: User + Send + Sync, B: AuthorizationBackend<U>> {
+    authorization_backend: B,
+    _marker: PhantomData<U>,
+}
+
+impl<S, U, B> Layer<S> for AuthorizationLayer<U, B>
+where
+    B: AuthorizationBackend<U>,
+    U: User + Send + Sync,
+{
+    type Service = AuthorizationService<S, U, B>;
+
+    fn layer(&self, service: S) -> Self::Service {
+        AuthorizationService::new(service, self.authorization_backend.clone())
+    }
 }

@@ -65,7 +65,7 @@ impl<T: AuthProof> IntoResponseParts for AuthStateChange<T> {
 }
 
 
-pub trait User {
+pub trait User: std::fmt::Debug + Clone {
     fn roles(&self) -> HashSet<String> {
         HashSet::new()
     }

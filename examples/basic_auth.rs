@@ -218,6 +218,8 @@ use axum::{
     Json, Router,
 };
 use axum_authnz::authentication::{self, AuthManagerLayer, AuthUser, AuthenticationService, User};
+use axum_authnz::authorization::backends::role_authorization_backend::RoleAuthorizationBackend;
+use axum_authnz::authorization::{AuthorizationBuilder, AuthorizationLayer};
 use axum_authnz::{
     authentication::{AuthProof, AuthStateChange, AuthenticationBackend},
     transform::{AuthProofTransformer, AuthProofTransformerLayer, AuthProofTransformerService},
@@ -422,17 +424,25 @@ async fn main() {
         },
     );
 
+    let auth_proof_transfomer_layer =
+        AuthProofTransformerLayer::<BasicAuthProof, HeaderAuthProofTransformer>::new(
+            HeaderAuthProofTransformer::new("Authorization".into()),
+        );
+
     let authentication_backend = DummyAuthenticationBackend { users };
+    let authentication_layer = AuthManagerLayer::new(authentication_backend);
+    
+    let authorization_layer =
+        AuthorizationBuilder::new(RoleAuthorizationBackend::<MyUser>::new("Olaf"))
+            .and(RoleAuthorizationBackend::new("Harald"))
+            .or(RoleAuthorizationBackend::new("Einar"))
+            .build();
 
     let app = Router::new().route("/", get(root)).route_layer(
         ServiceBuilder::new()
-            .layer(AuthProofTransformerLayer::<
-                BasicAuthProof,
-                HeaderAuthProofTransformer,
-            >::new(HeaderAuthProofTransformer::new(
-                "Authorization".into(),
-            )))
-            .layer(AuthManagerLayer::new(authentication_backend)),
+            .layer(auth_proof_transfomer_layer)
+            .layer(authentication_layer)
+            .layer(authorization_layer),
     );
 
     // run our app with hyper, listening globally on port 3000

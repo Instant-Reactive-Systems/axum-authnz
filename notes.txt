@@ -1,0 +1,2 @@
+check how this integrates with state
+use specific traits instead of generic user
