@@ -203,6 +203,7 @@ req -> AuthSessionService -> calls AuthSessionBackend.extract_authentication_pro
 
 */
 
+use std::collections::HashSet;
 use std::convert::Infallible;
 use std::{collections::HashMap, io::Read};
 
@@ -301,11 +302,15 @@ impl HeaderAuthProofTransformer {
 #[derive(Debug, Clone)]
 struct MyUser {
     id: u128,
+    roles: HashSet<String>,
 }
 
 impl User for MyUser {
-
+    fn roles(&self) -> HashSet<String> {
+        self.roles.clone()
+    }
 }
+
 #[async_trait]
 impl AuthenticationBackend for DummyAuthenticationBackend {
     type AuthProof = BasicAuthProof;
@@ -339,13 +344,11 @@ impl AuthenticationBackend for DummyAuthenticationBackend {
         &mut self,
         auth_proof: Self::AuthProof,
     ) -> Result<AuthUser<Self::User>, Self::Error> {
-        let result = self.users
-            .get(&auth_proof)
-            .map_or_else(
-                || Ok(AuthUser::Unaunthenticated),
-                |user| Ok(AuthUser::Authenticated(user.clone())),
-            );
-        
+        let result = self.users.get(&auth_proof).map_or_else(
+            || Ok(AuthUser::Unaunthenticated),
+            |user| Ok(AuthUser::Authenticated(user.clone())),
+        );
+
         println!("result");
         result
     }
@@ -401,7 +404,7 @@ async fn root(user: AuthUser<MyUser>) -> impl IntoResponse {
     match user {
         AuthUser::Authenticated(user) => {
             format!("Hello user: {}", user.id)
-        },
+        }
         AuthUser::Unaunthenticated => {
             format!("Hello anonymous one")
         }
@@ -411,7 +414,13 @@ async fn root(user: AuthUser<MyUser>) -> impl IntoResponse {
 #[tokio::main]
 async fn main() {
     let mut users = HashMap::new();
-    users.insert(BasicAuthProof::new("username", "password"), MyUser { id: 0 });
+    users.insert(
+        BasicAuthProof::new("username", "password"),
+        MyUser {
+            id: 0,
+            roles: HashSet::from(["Einar".to_owned(), "Olaf".to_owned(), "Harald".to_owned()]),
+        },
+    );
 
     let authentication_backend = DummyAuthenticationBackend { users };
 
