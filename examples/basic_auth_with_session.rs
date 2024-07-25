@@ -3,6 +3,7 @@ use std::convert::Infallible;
 use std::{collections::HashMap, io::Read};
 
 use axum::body::Bytes;
+use axum::http::StatusCode;
 use axum::Extension;
 use axum::{
     async_trait,
@@ -20,10 +21,11 @@ use axum_authnz::{
     transform::{AuthProofTransformer, AuthProofTransformerLayer, AuthProofTransformerService},
 };
 use base64::Engine;
-use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tower::ServiceBuilder;
-use tower_sessions::{MemoryStore, SessionManagerLayer};
+use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 
 type SessionAuthProof = MyUser;
 
@@ -34,19 +36,25 @@ pub struct SessionAuthProofParseError(#[from] serde_json::Error);
 impl AuthProof for SessionAuthProof {
     type Error = SessionAuthProofParseError;
 
-    fn from_bytes(bytes: axum::body::Bytes) -> Result<Self, Self::Error> {}
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionAuthProofTransformer {}
-
-impl SessionAuthProofTransformer {
-    pub fn new() -> Self {
-        Self {}
+    fn from_bytes(bytes: axum::body::Bytes) -> Result<Self, Self::Error> {
+        unimplemented!()
     }
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionAuthProofTransformer {
+    auth_proof_key: String
+}
+
+impl SessionAuthProofTransformer {
+    pub fn new(auth_proof_key: impl Into<String>) -> Self {
+        Self {
+            auth_proof_key: auth_proof_key.into()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct MyUser {
     id: u128,
     roles: HashSet<String>,
@@ -58,11 +66,41 @@ impl User for MyUser {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BasicAuthCredentials {
+    username: String,
+    password: String,
+}
+
+impl BasicAuthCredentials {
+    pub fn new(username: impl Into<String>, password: impl Into<String>) -> Self {
+        BasicAuthCredentials {
+            username: username.into(),
+            password: password.into(),
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum AuthenticationError {
+    #[error("invalid credentials")]
+    InvalidCredentials,
+}
+
+impl IntoResponse for AuthenticationError {
+    fn into_response(self) -> Response {
+        match self {
+            AuthenticationError::InvalidCredentials => {
+                (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response()
+            }
+        }
+    }
+}
 #[async_trait]
 impl AuthenticationBackend for DummyAuthenticationBackend {
     type AuthProof = SessionAuthProof;
-    type Credentials = (); // Not used since we do not have login/logout as auth is stateless
-    type Error = Infallible;
+    type Credentials = BasicAuthCredentials; // Not used since we do not have login/logout as auth is stateless
+    type Error = AuthenticationError;
     type User = MyUser;
 
     /// Logs in user
@@ -71,9 +109,15 @@ impl AuthenticationBackend for DummyAuthenticationBackend {
     async fn login(
         &mut self,
         // ili requset: direkt
-        _credentials: Self::Credentials,
+        credentials: Self::Credentials,
     ) -> Result<AuthStateChange<Self::AuthProof>, Self::Error> {
-        unimplemented!()
+        let user = self
+            .users
+            .get(&credentials)
+            .ok_or(AuthenticationError::InvalidCredentials)
+            .map(|user| user.clone())?;
+
+        Ok(AuthStateChange::LoggedIn(user))
     }
 
     /// Logs out user
@@ -83,7 +127,7 @@ impl AuthenticationBackend for DummyAuthenticationBackend {
         &mut self,
         auth_proof: Self::AuthProof,
     ) -> Result<AuthStateChange<Self::AuthProof>, Self::Error> {
-        unimplemented!()
+        Ok(AuthStateChange::LoggedOut(auth_proof))
     }
 
     /// Verifies [crate::authentication::AuthProof] and returns the authenticated user
@@ -91,39 +135,61 @@ impl AuthenticationBackend for DummyAuthenticationBackend {
         &mut self,
         auth_proof: Self::AuthProof,
     ) -> Result<AuthUser<Self::User>, Self::Error> {
-        unimplemented!()
+        Ok(AuthUser::Authenticated(auth_proof))
     }
 }
 
 #[derive(Debug, Clone)]
 struct DummyAuthenticationBackend {
-    pub users: HashMap<BasicAuthProof, MyUser>,
+    pub users: HashMap<BasicAuthCredentials, MyUser>,
+}
+
+#[derive(Debug, Error)]
+pub enum SessionAuthError {
+    #[error("Could not extract session manager from extensions")]
+    MissingSesssionManagerLayer,
+    #[error("Session error")]
+    SessionError(#[from] tower_sessions::session::Error),
+}
+
+impl IntoResponse for SessionAuthError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::MissingSesssionManagerLayer => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Can't extract session. Is `SessionManagerLayer` enabled?",
+            )
+                .into_response(),
+            Self::SessionError(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal session manager error",
+            )
+                .into_response(),
+        }
+    }
 }
 
 #[async_trait]
-impl<AuthnProof: AuthProof + 'static> AuthProofTransformer<AuthnProof>
-    for HeaderAuthProofTransformer
+impl<
+        AuthnProof: AuthProof + 'static + Serialize + for<'de> Deserialize<'de> + DeserializeOwned,
+    > AuthProofTransformer<AuthnProof> for SessionAuthProofTransformer
 {
-    type Error = Infallible;
+    type Error = SessionAuthError;
 
     /// Inserts [crate::authentication::AuthProof] into the request and returns the modified request with [crate::authentication::AuthProof]
     /// inserted into extensions
     ///
     /// Refer to [https://github.com/tokio-rs/axum/blob/main/examples/consume-body-in-extractor-or-middleware/src/main.rs]
     async fn insert_auth_proof(&mut self, mut request: Request) -> Result<Request, Self::Error> {
-        if let Some(header) = request.headers().get(&self.header) {
-            let auth_proof = AuthnProof::from_bytes(Bytes::copy_from_slice(header.as_bytes()));
-            match auth_proof {
-                Ok(auth_proof) => {
-                    println!("{:?}", auth_proof);
-                    request.extensions_mut().insert(auth_proof);
-                    Ok(request)
-                }
-                Err(err) => {
-                    println!("{:?}", err);
-                    Ok(request)
-                }
-            }
+        let session = request
+            .extensions()
+            .get::<Session>()
+            .cloned()
+            .ok_or(SessionAuthError::MissingSesssionManagerLayer)?;
+
+        if let Some(auth_proof) = session.get::<AuthnProof>(&self.auth_proof_key).await? {
+            request.extensions_mut().insert(auth_proof);
+            Ok(request)
         } else {
             Ok(request)
         }
@@ -156,7 +222,7 @@ async fn root(user: AuthUser<MyUser>) -> impl IntoResponse {
 async fn main() {
     let mut users = HashMap::new();
     users.insert(
-        BasicAuthProof::new("username", "password"),
+        BasicAuthCredentials::new("username", "password"),
         MyUser {
             id: 0,
             roles: HashSet::from(["Einar".to_owned(), "Olaf".to_owned(), "Harald".to_owned()]),
@@ -168,8 +234,8 @@ async fn main() {
         SessionManagerLayer::new(session_store).with_expiry(tower_sessions::Expiry::OnSessionEnd);
 
     let auth_proof_transfomer_layer =
-        AuthProofTransformerLayer::<BasicAuthProof, HeaderAuthProofTransformer>::new(
-            HeaderAuthProofTransformer::new("Authorization".into()),
+        AuthProofTransformerLayer::<SessionAuthProof, SessionAuthProofTransformer>::new(
+            SessionAuthProofTransformer::new("auth_proof"),
         );
 
     let authentication_backend = DummyAuthenticationBackend { users };
