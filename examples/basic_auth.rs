@@ -441,20 +441,13 @@ async fn main() {
             .or(RoleAuthorizationBackend::new("Einar"))
             .build();
 
-    async fn propagate_session_to_response(req: Request, next: Next) -> Response {
-        let session = req.extensions().get::<Session>().cloned();
-        let mut response = next.run(req).await;
 
-        response.extensions_mut().insert(session);
-        response
-    }
 
     let app = Router::new().route("/", get(root)).route_layer(
         ServiceBuilder::new()
             .layer(auth_proof_transfomer_layer)
             .layer(authentication_layer)
             .layer(authorization_layer)
-            .layer(middleware::from_fn(propagate_session_to_response)),
     );
 
     // run our app with hyper, listening globally on port 3000

@@ -17,6 +17,7 @@ use axum::{
 };
 use axum::{middleware, Extension, Form};
 use axum_authnz::authentication::{self, AuthManagerLayer, AuthUser, AuthenticationService, User};
+use axum_authnz::authorization::backends::login_backend::LoginAuthorizationBackend;
 use axum_authnz::authorization::backends::role_authorization_backend::RoleAuthorizationBackend;
 use axum_authnz::authorization::{AuthorizationBuilder, AuthorizationLayer};
 use axum_authnz::{
@@ -284,8 +285,9 @@ async fn main() {
     );
 
     let session_store = MemoryStore::default();
-    let session_layer =
-        SessionManagerLayer::new(session_store).with_secure(false).with_expiry(tower_sessions::Expiry::OnInactivity(Duration::hours(5)));
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false)
+        .with_expiry(tower_sessions::Expiry::OnInactivity(Duration::hours(5)));
 
     let auth_proof_transfomer_layer = AuthProofTransformerLayer::<
         SessionAuthProof,
@@ -295,7 +297,8 @@ async fn main() {
     let authentication_backend = DummyAuthenticationBackend { users };
     let authentication_layer = AuthManagerLayer::new(authentication_backend);
 
- 
+    let authorization_layer =
+        AuthorizationBuilder::new(LoginAuthorizationBackend::<MyUser>::new()).build();
 
     async fn propagate_session_to_response(req: Request, next: Next) -> Response {
         let session = req.extensions().get::<Session>().cloned();
@@ -313,11 +316,9 @@ async fn main() {
         response
     }
 
-
-
     let app = Router::new()
         .route("/login", post(login))
-        .route("/logout", post(logout))
+        .route("/logout", post(logout).layer(authorization_layer))
         .route("/", get(root))
         .route_layer(
             ServiceBuilder::new()
