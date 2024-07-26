@@ -4,7 +4,9 @@ use std::{collections::HashMap, io::Read};
 
 use axum::body::Bytes;
 use axum::http::StatusCode;
-use axum::Extension;
+use axum::middleware::Next;
+use axum::response::Redirect;
+use axum::routing::post;
 use axum::{
     async_trait,
     extract::Request,
@@ -13,6 +15,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use axum::{middleware, Extension, Form};
 use axum_authnz::authentication::{self, AuthManagerLayer, AuthUser, AuthenticationService, User};
 use axum_authnz::authorization::backends::role_authorization_backend::RoleAuthorizationBackend;
 use axum_authnz::authorization::{AuthorizationBuilder, AuthorizationLayer};
@@ -24,8 +27,9 @@ use base64::Engine;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tower::ServiceBuilder;
-use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
+use tower::{Service, ServiceBuilder};
+use tower_sessions::cookie::time::Duration;
+use tower_sessions::{session_store, MemoryStore, Session, SessionManagerLayer};
 
 type SessionAuthProof = MyUser;
 
@@ -43,13 +47,13 @@ impl AuthProof for SessionAuthProof {
 
 #[derive(Debug, Clone)]
 pub struct SessionAuthProofTransformer {
-    auth_proof_key: String
+    auth_proof_key: String,
 }
 
 impl SessionAuthProofTransformer {
     pub fn new(auth_proof_key: impl Into<String>) -> Self {
         Self {
-            auth_proof_key: auth_proof_key.into()
+            auth_proof_key: auth_proof_key.into(),
         }
     }
 }
@@ -66,7 +70,7 @@ impl User for MyUser {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 struct BasicAuthCredentials {
     username: String,
     password: String,
@@ -157,7 +161,7 @@ impl IntoResponse for SessionAuthError {
         match self {
             Self::MissingSesssionManagerLayer => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Can't extract session. Is `SessionManagerLayer` enabled?",
+                "Is 'SessionManagerLayer` enabled?",
             )
                 .into_response(),
             Self::SessionError(_) => (
@@ -181,13 +185,15 @@ impl<
     ///
     /// Refer to [https://github.com/tokio-rs/axum/blob/main/examples/consume-body-in-extractor-or-middleware/src/main.rs]
     async fn insert_auth_proof(&mut self, mut request: Request) -> Result<Request, Self::Error> {
-        let session = request
-            .extensions()
-            .get::<Session>()
-            .cloned()
-            .ok_or(SessionAuthError::MissingSesssionManagerLayer)?;
+        let session = request.extensions().get::<Session>().cloned(); // TODO: Or just use seflf, check which is better, also check clones and possible optimizations everywhere
+
+        let session = match session {
+            Some(session) => session,
+            None => return Ok(request),
+        };
 
         if let Some(auth_proof) = session.get::<AuthnProof>(&self.auth_proof_key).await? {
+            println!("Got auth proof");
             request.extensions_mut().insert(auth_proof);
             Ok(request)
         } else {
@@ -203,6 +209,26 @@ impl<
         &mut self,
         response: Response,
     ) -> Result<Response, Self::Error> {
+        let session = response.extensions().get::<Session>().cloned(); // TODO: Or just use seflf, check which is better, also check clones and possible optimizations everywhere
+
+        let session = match session {
+            Some(session) => session,
+            None => return Ok(response),
+        };
+
+        if let Some(auth_state_change) = response.extensions().get::<AuthStateChange<AuthnProof>>()
+        {
+            match auth_state_change {
+                AuthStateChange::LoggedIn(auth_proof) => {
+                    session.cycle_id().await?;
+                    session.insert(&self.auth_proof_key, auth_proof).await?;
+                }
+                AuthStateChange::LoggedOut(_) => {
+                    session.flush().await?;
+                }
+            }
+        }
+
         Ok(response)
     }
 }
@@ -215,6 +241,34 @@ async fn root(user: AuthUser<MyUser>) -> impl IntoResponse {
         AuthUser::Unaunthenticated => {
             format!("Hello anonymous one")
         }
+    }
+}
+
+async fn login(
+    mut authentication_service: AuthenticationService<DummyAuthenticationBackend>,
+    credentials: Form<BasicAuthCredentials>,
+) -> Response {
+    let login_result = authentication_service.login(credentials.0).await;
+
+    match login_result {
+        Ok(auth_state_change) => (auth_state_change, Redirect::to("/")).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn logout(
+    mut authentication_service: AuthenticationService<DummyAuthenticationBackend>,
+    auth_proof: Option<Extension<SessionAuthProof>>,
+) -> impl IntoResponse {
+    if let Some(auth_proof) = auth_proof {
+        let logout_result = authentication_service.logout(auth_proof.0).await;
+
+        match logout_result {
+            Ok(auth_state_change) => (auth_state_change, Redirect::to("/login")).into_response(),
+            Err(e) => e.into_response(),
+        }
+    } else {
+        Redirect::to("/").into_response()
     }
 }
 
@@ -231,29 +285,47 @@ async fn main() {
 
     let session_store = MemoryStore::default();
     let session_layer =
-        SessionManagerLayer::new(session_store).with_expiry(tower_sessions::Expiry::OnSessionEnd);
+        SessionManagerLayer::new(session_store).with_secure(false).with_expiry(tower_sessions::Expiry::OnInactivity(Duration::hours(5)));
 
-    let auth_proof_transfomer_layer =
-        AuthProofTransformerLayer::<SessionAuthProof, SessionAuthProofTransformer>::new(
-            SessionAuthProofTransformer::new("auth_proof"),
-        );
+    let auth_proof_transfomer_layer = AuthProofTransformerLayer::<
+        SessionAuthProof,
+        SessionAuthProofTransformer,
+    >::new(SessionAuthProofTransformer::new("auth_proof"));
 
     let authentication_backend = DummyAuthenticationBackend { users };
     let authentication_layer = AuthManagerLayer::new(authentication_backend);
 
-    let authorization_layer =
-        AuthorizationBuilder::new(RoleAuthorizationBackend::<MyUser>::new("Olaf"))
-            .and(RoleAuthorizationBackend::new("Harald"))
-            .or(RoleAuthorizationBackend::new("Einar"))
-            .build();
+ 
 
-    let app = Router::new().route("/", get(root)).route_layer(
-        ServiceBuilder::new()
-            .layer(session_layer)
-            .layer(auth_proof_transfomer_layer)
-            .layer(authentication_layer)
-            .layer(authorization_layer),
-    );
+    async fn propagate_session_to_response(req: Request, next: Next) -> Response {
+        let session = req.extensions().get::<Session>().cloned();
+        let mut response = next.run(req).await;
+
+        if let Some(session) = session {
+            println!("Inserting session");
+            println!("{:?}", session);
+            session.insert("TEST", 5).await.unwrap();
+            response.extensions_mut().insert(session);
+        } else {
+            println!("No session")
+        }
+
+        response
+    }
+
+
+
+    let app = Router::new()
+        .route("/login", post(login))
+        .route("/logout", post(logout))
+        .route("/", get(root))
+        .route_layer(
+            ServiceBuilder::new()
+                .layer(session_layer)
+                .layer(auth_proof_transfomer_layer)
+                .layer(authentication_layer)
+                .layer(middleware::from_fn(propagate_session_to_response)),
+        );
 
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();

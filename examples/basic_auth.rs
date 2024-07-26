@@ -208,7 +208,8 @@ use std::convert::Infallible;
 use std::{collections::HashMap, io::Read};
 
 use axum::body::Bytes;
-use axum::Extension;
+use axum::http::request;
+use axum::middleware::Next;
 use axum::{
     async_trait,
     extract::Request,
@@ -217,6 +218,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use axum::{middleware, Extension};
 use axum_authnz::authentication::{self, AuthManagerLayer, AuthUser, AuthenticationService, User};
 use axum_authnz::authorization::backends::role_authorization_backend::RoleAuthorizationBackend;
 use axum_authnz::authorization::{AuthorizationBuilder, AuthorizationLayer};
@@ -228,6 +230,7 @@ use base64::Engine;
 use serde::Serialize;
 use thiserror::Error;
 use tower::ServiceBuilder;
+use tower_sessions::Session;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BasicAuthProof {
@@ -431,18 +434,27 @@ async fn main() {
 
     let authentication_backend = DummyAuthenticationBackend { users };
     let authentication_layer = AuthManagerLayer::new(authentication_backend);
-    
+
     let authorization_layer =
         AuthorizationBuilder::new(RoleAuthorizationBackend::<MyUser>::new("Olaf"))
             .and(RoleAuthorizationBackend::new("Harald"))
             .or(RoleAuthorizationBackend::new("Einar"))
             .build();
 
+    async fn propagate_session_to_response(req: Request, next: Next) -> Response {
+        let session = req.extensions().get::<Session>().cloned();
+        let mut response = next.run(req).await;
+
+        response.extensions_mut().insert(session);
+        response
+    }
+
     let app = Router::new().route("/", get(root)).route_layer(
         ServiceBuilder::new()
             .layer(auth_proof_transfomer_layer)
             .layer(authentication_layer)
-            .layer(authorization_layer),
+            .layer(authorization_layer)
+            .layer(middleware::from_fn(propagate_session_to_response)),
     );
 
     // run our app with hyper, listening globally on port 3000
