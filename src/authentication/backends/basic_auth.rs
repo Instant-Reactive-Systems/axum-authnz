@@ -1,9 +1,12 @@
 use base64::Engine;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::authentication::AuthProof;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub type BasicAuthCredentials = BasicAuthProof;
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BasicAuthProof {
     username: String,
     password: String,
