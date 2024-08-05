@@ -115,7 +115,6 @@ async fn main() {
         ServiceBuilder::new()
             .layer(auth_proof_transfomer_layer)
             .layer(authentication_layer)
-            .layer(authorization_layer),
     );
 
     // run our app with hyper, listening globally on port 3000
