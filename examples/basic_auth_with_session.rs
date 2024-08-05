@@ -16,7 +16,7 @@ use axum::{
     Json, Router,
 };
 use axum::{middleware, Extension, Form};
-use axum_authnz::authentication::{self, AuthManagerLayer, AuthUser, AuthenticationService, User};
+use axum_authnz::authentication::{self, AuthManagerLayer, AuthUser, AuthenticationService, User, UserWithRoles};
 use axum_authnz::authorization::backends::login_backend::LoginAuthorizationBackend;
 use axum_authnz::authorization::backends::role_authorization_backend::RoleAuthorizationBackend;
 use axum_authnz::authorization::{AuthorizationBuilder, AuthorizationLayer};
@@ -38,13 +38,6 @@ type SessionAuthProof = MyUser;
 #[error(transparent)]
 pub struct SessionAuthProofParseError(#[from] serde_json::Error);
 
-impl AuthProof for SessionAuthProof {
-    type Error = SessionAuthProofParseError;
-
-    fn from_bytes(bytes: axum::body::Bytes) -> Result<Self, Self::Error> {
-        unimplemented!()
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct SessionAuthProofTransformer {
@@ -66,6 +59,12 @@ struct MyUser {
 }
 
 impl User for MyUser {
+ 
+}
+impl AuthProof for MyUser {}
+
+
+impl UserWithRoles for MyUser {
     fn roles(&self) -> HashSet<String> {
         self.roles.clone()
     }

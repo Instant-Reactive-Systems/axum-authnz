@@ -9,6 +9,8 @@ use thiserror::Error;
 
 use crate::{authentication::User, authorization::AuthorizationBackend};
 
+/// Combines two authorization backends in a short circuit fashion.
+/// The request is allowed only if both of the backends allow the requests
 #[derive(Debug, Clone)]
 pub struct AndAuthorizationBackend<T, E> {
     first: T,

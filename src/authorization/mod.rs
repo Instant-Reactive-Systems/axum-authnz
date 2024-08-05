@@ -1,5 +1,5 @@
+/// Contains authorization layer core traits and implementations.
 use std::{
-    collections::HashSet,
     future::Future,
     marker::PhantomData,
     pin::Pin,
@@ -11,7 +11,6 @@ use axum::{
     extract::Request,
     http::request::Parts,
     response::{IntoResponse, Response},
-    RequestExt,
 };
 use backends::{
     and_authorization_backend::AndAuthorizationBackend,
@@ -37,6 +36,8 @@ pub trait AuthorizationBackend<AuthzUser: User + Send + Sync>:
     async fn authorize(&self, req_parts: &Parts) -> Result<bool, Self::Error>;
 }
 
+// TODO: Could we maybe get rid of these _markers
+/// Builder used for combining multiple authorization backends into a single [crate::authorization::AuthorizationLayer]
 #[derive(Debug, Clone)]
 pub struct AuthorizationBuilder<U: User + Send + Sync, B: AuthorizationBackend<U>> {
     authorization_backend: B,
@@ -44,6 +45,7 @@ pub struct AuthorizationBuilder<U: User + Send + Sync, B: AuthorizationBackend<U
 }
 
 impl<U: User + Send + Sync, B1: AuthorizationBackend<U>> AuthorizationBuilder<U, B1> {
+    /// Creates a new instance of the builder with the provided authorization backend
     pub fn new(authorization_backend: B1) -> Self {
         AuthorizationBuilder {
             authorization_backend,
@@ -51,6 +53,7 @@ impl<U: User + Send + Sync, B1: AuthorizationBackend<U>> AuthorizationBuilder<U,
         }
     }
 
+    /// Combines the current authorization backend with the provided authorization backend inside an [authorization::backend::and_authorization_backend::AndAuthorizationBackend]
     pub fn and<B2: AuthorizationBackend<U>>(
         self,
         authorization_backend: B2,
@@ -64,6 +67,7 @@ impl<U: User + Send + Sync, B1: AuthorizationBackend<U>> AuthorizationBuilder<U,
         }
     }
 
+    /// Combines the current authorization backend with the provided authorization backend inside an [authorization::backend::or_authorization_backend::OrAuthorizationBackend]
     pub fn or<B2: AuthorizationBackend<U>>(
         self,
         authorization_backend: B2,
@@ -77,6 +81,7 @@ impl<U: User + Send + Sync, B1: AuthorizationBackend<U>> AuthorizationBuilder<U,
         }
     }
 
+    /// Consumes the builder to build the [crate::authorization::AuthorizationLayer]
     pub fn build(self) -> AuthorizationLayer<U, B1> {
         AuthorizationLayer {
             authorization_backend: self.authorization_backend,
@@ -85,6 +90,7 @@ impl<U: User + Send + Sync, B1: AuthorizationBackend<U>> AuthorizationBuilder<U,
     }
 }
 
+/// Axum tower service which denies or allows requests based on the decision of the provided authorization backend
 #[derive(Debug, Clone)]
 pub struct AuthorizationService<S, U: User + Send + Sync, B: AuthorizationBackend<U>> {
     inner: S,
@@ -97,6 +103,9 @@ where
     B: AuthorizationBackend<U>,
     U: User + Send + Sync,
 {
+    /// Creates new instance of AuthorizationLayer with the provided backend
+    ///
+    /// Consider using [crate::authorization::AuthorizationBuilder] if you are using complex authorization backends
     pub fn new(backend: B) -> Self {
         Self {
             authorization_backend: backend,
@@ -110,6 +119,7 @@ where
     B: AuthorizationBackend<U>,
     U: User + Send + Sync,
 {
+    /// Creates new instance of AuthorizationService middleware with the provided backend and inner service 
     pub fn new(service: S, backend: B) -> Self {
         Self {
             inner: service,
@@ -148,12 +158,13 @@ where
         Box::pin(async move {
             let (parts, body) = req.into_parts(); // TODO: Check if there is a better way
 
+            //TODO: Should we limit ourselves to $parts instead of the full request, maybe not, maybe its better to pass in whole request and return it
             let authorized = match backend.authorize(&parts).await {
                 Ok(authorized) => authorized,
                 Err(err) => return Ok(err.into_response()),
             };
 
-            if !authorized {
+            if !authorized { // TODO: Allow customizing unauthorized response
                 let mut response = Response::default();
                 *response.status_mut() = axum::http::StatusCode::UNAUTHORIZED;
                 return Ok(response);
@@ -167,6 +178,7 @@ where
     }
 }
 
+/// Axum tower layer used for authorizaiton
 #[derive(Debug, Clone)]
 pub struct AuthorizationLayer<U: User + Send + Sync, B: AuthorizationBackend<U>> {
     authorization_backend: B,

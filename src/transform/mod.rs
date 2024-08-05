@@ -1,3 +1,5 @@
+/// Contains transform layer core traits and implementations.
+
 use std::{
     future::Future,
     marker::PhantomData,
@@ -10,6 +12,7 @@ use axum::{
     extract::Request,
     response::{IntoResponse, Response},
 };
+
 use tower::{Layer, Service};
 
 use crate::authentication::AuthProof;
@@ -18,18 +21,15 @@ pub mod backends;
 
 /// Extracts and inserts (transforms) [crate::authentication::AuthProof] from requests/responses
 ///
-/// Used as a layer to transform different types of client side provided data along with any state into [crate::authentication::AuthProof]
+/// Used as a layer to transform different types of client side provided data into [crate::authentication::AuthProof]
 ///
 /// It is up to the implementor of [crate::authentication::AuthProof] to handle converting raw parsed bytes into and from itself
 ///
 /// For example:
 ///     - HeaderAuthProofTransformer extracts [crate::authentication::AuthProof] from the request header using no state, ignores login/logout event,
 ///       useful for services that only do authorization with no login/logout flows
-///     - CookieAuthProofTransformer extracts [crate::authentication::AuthProof] from regular, private and signed cookies using no state
-///       and sets/unsets the cookies upon login/logout events
 ///     - SessionAuthProofTransformer extracts [crate::authentication::AuthProof] from http sessions using tower sessions
-///       
-/// and creates/destroys the session upon login/logout requests
+///       and creates/destroys the session upon login/logout requests
 #[async_trait]
 pub trait AuthProofTransformer<T: AuthProof>: std::fmt::Debug + Clone + Send + Sync {
     type Error: Send + Sync + IntoResponse;
@@ -43,13 +43,14 @@ pub trait AuthProofTransformer<T: AuthProof>: std::fmt::Debug + Clone + Send + S
     /// Receives and handles [crate::authentication::AuthStateChange] in response extensions
     ///
     /// For example for session based auth and the LoggedIn event we would insert a new session and return the modified response which contains the session id
-    /// [crate::authentication::AuthProof] into it so we can identify the user on new requests
     async fn process_auth_state_change(
         &mut self,
         response: Response,
     ) -> Result<Response, Self::Error>;
 }
 
+
+/// Axum tower service which calls into the provided [crate::authentication::AuthProofTransformer] backend on request/response
 #[derive(Debug, Clone)]
 pub struct AuthProofTransformerService<S, AuthnProof, Backend>
 where
@@ -75,7 +76,6 @@ where
     }
 }
 
-/// A middleware that provides [`AuthSession`] as a request extension.
 impl<S, Backend, AuthnProof> Service<Request>
     for AuthProofTransformerService<S, AuthnProof, Backend>
 where

@@ -10,6 +10,8 @@ use crate::{
     authorization::{AuthorizationBackend},
 };
 
+/// Combines two authorization backends in a short circuit fashion.
+/// The request is allowed only if one of the backends allow the request
 #[derive(Debug, Clone)]
 pub struct OrAuthorizationBackend<T, E> {
     first: T,

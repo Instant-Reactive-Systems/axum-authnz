@@ -1,2 +1,4 @@
 check how this integrates with state
 use specific traits instead of generic user
+remove bytes requirement on authentication proof
+merge cookies auth with session auth, in other words cookies as session backend

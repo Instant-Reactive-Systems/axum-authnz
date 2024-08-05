@@ -1,55 +1,36 @@
+/// Contains authentication layer core traits and their implementations
 use std::{
-    collections::{HashMap, HashSet}, convert::Infallible, future::Future, pin::Pin, task::{Context, Poll}
+    collections::HashSet,
+    convert::Infallible,
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
 };
 
 use axum::{
     async_trait,
-    body::Bytes,
     extract::{FromRequestParts, Request},
     http::{request::Parts, StatusCode},
-    middleware::AddExtension,
     response::{IntoResponse, IntoResponseParts, Response},
-    Extension,
 };
+
 use tower::{Layer, Service};
 
 pub mod backends;
 
 /// Marker trait transformed user credentials, proof of authentication
 ///
-/// For basic auth this is the same as Credentials
-/// For JWT auth this is the JWT
-/// For oauth this is the access token
-/// For session based auth is used only to identify the user
-pub trait AuthProof: std::fmt::Debug + Clone + Send + Sync + 'static {
-    type Error: std::error::Error;
+/// These are not the credentials supplied by the user in most cases besides basic authentication.
+/// Instead AuthProof represents the proof that an user is authenticated after user credentials are verified.
+/// For example for JWT authentication in combination with username/password credentials the authentication proof would
+/// be the generated JWT token and not the username/password credentials.
+pub trait AuthProof: std::fmt::Debug + Clone + Send + Sync + 'static {} // TODO: Is this marker trait needed or would it be cleaner without the bounds?
 
-    fn from_bytes(bytes: Bytes) -> Result<Self, Self::Error>;
-}
-
-/// Represents a change in authentication state for an user
+/// Represents a change in authentication state change for an user
 #[derive(Debug, Clone)]
 pub enum AuthStateChange<T: AuthProof> {
     LoggedIn(T),
     LoggedOut(T),
-}
-
-#[derive(Debug, Clone)]
-pub enum AuthUser<User> {
-    Authenticated(User),
-    Unaunthenticated,
-}
-
-#[async_trait]
-impl<User: Send + Sync + Clone + 'static, S> FromRequestParts<S> for AuthUser<User> {
-    type Rejection = (StatusCode, &'static str);
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts.extensions.get::<AuthUser<User>>().cloned().ok_or((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Can't extract auth user service. Is AuthenticationService layer enabled?",
-        ))
-    }
 }
 
 impl<T: AuthProof> IntoResponseParts for AuthStateChange<T> {
@@ -64,14 +45,40 @@ impl<T: AuthProof> IntoResponseParts for AuthStateChange<T> {
     }
 }
 
+/// Represents an authenticated or anonymous user
+#[derive(Debug, Clone)]
+pub enum AuthUser<User> {
+    Authenticated(User),
+    Unaunthenticated, // TODO: Consider adding anonymous user data as well,
+}
 
-pub trait User: std::fmt::Debug + Clone {
+#[async_trait]
+impl<User: Send + Sync + Clone + 'static, S> FromRequestParts<S> for AuthUser<User> {
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts.extensions.get::<AuthUser<User>>().cloned().ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Can't extract auth user service. Is AuthenticationServiceLayer enabled?",
+        ))
+    }
+}
+
+/// Represents a generic user
+pub trait User: std::fmt::Debug + Clone {} // TODO: Do we need this?
+
+/// Represents a user which has roles. I
+/// Implement this trait if you wish to use [crate::authorization::backends::role_authorization_backend] for authorization
+pub trait UserWithRoles: User {
+    /// Returns a hashset of user roles
     fn roles(&self) -> HashSet<String> {
         HashSet::new()
     }
 }
 
-
+/// Trait for representing an arbitrary authentication backend
+///
+/// The authentication backend is responsible for handling login/logout events and verifying authentication proof which is extracted by the transform layer
 #[async_trait]
 pub trait AuthenticationBackend: std::fmt::Debug + Clone + Send + Sync {
     type AuthProof: AuthProof;
@@ -96,19 +103,24 @@ pub trait AuthenticationBackend: std::fmt::Debug + Clone + Send + Sync {
         auth_proof: Self::AuthProof,
     ) -> Result<AuthStateChange<Self::AuthProof>, Self::Error>;
 
-    /// Verifies [crate::authentication::AuthProof] and returns the authenticated user
+    /// Verifies [crate::authentication::AuthProof] and returns an authenticated or anonymous user in case auth_proof is invalid
+    ///
+    /// Authorization should not be implemented in this layer, instead use authorization layer with [crate::authorization::backends::login_backend]
     async fn authenticate(
         &mut self,
         auth_proof: Self::AuthProof,
     ) -> Result<AuthUser<Self::User>, Self::Error>;
 }
 
+/// Wrapper type for AuthenticationBackend
+// TODO: Can we bypass this by instead having a single type for service extractor and as service in
 #[derive(Debug, Clone)]
 pub struct AuthenticationService<Backend: AuthenticationBackend> {
     backend: Backend,
 }
 
 impl<Backend: AuthenticationBackend> AuthenticationService<Backend> {
+    /// Creates a new AuthenticationService from a backend
     pub fn new(backend: Backend) -> Self {
         Self { backend }
     }
@@ -135,7 +147,9 @@ impl<Backend: AuthenticationBackend> AuthenticationService<Backend> {
         self.backend.logout(auth_proof).await
     }
 
-    /// Verifies [crate::authentication::AuthProof] and returns the authenticated user
+    /// Verifies [crate::authentication::AuthProof] and returns an authenticated or anonymous user in case auth_proof is invalid
+    ///
+    /// Authorization should not be implemented in this layer, instead use authorization layer with [crate::authorization::backends::login_backend]
     async fn authenticate(
         &mut self,
         auth_proof: Backend::AuthProof,
@@ -163,6 +177,7 @@ where
     }
 }
 
+// TODO: Can we merge this and AuthenticationService, or clean this up in some other way
 #[derive(Debug, Clone)]
 pub struct AuthManagerService<S, Backend: AuthenticationBackend> {
     inner: S,
@@ -178,7 +193,7 @@ impl<S, Backend: AuthenticationBackend> AuthManagerService<S, Backend> {
     }
 }
 
-/// A middleware that provides [`AuthSession`] as a request extension.
+/// A middleware that provides [`crate::authentication::AuthUser`] as a request extension.
 impl<S, Backend> Service<Request> for AuthManagerService<S, Backend>
 where
     S: Service<Request, Response = Response> + Clone + Send + 'static,
@@ -219,7 +234,6 @@ where
             } else {
                 req.extensions_mut()
                     .insert(AuthUser::<Backend::User>::Unaunthenticated);
-                println!("No auth proof");
             }
 
             req.extensions_mut().insert(auth_service);
@@ -230,6 +244,7 @@ where
     }
 }
 
+// TODO: refer to todos above
 #[derive(Debug, Clone)]
 pub struct AuthManagerLayer<Backend>
 where
