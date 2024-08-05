@@ -1,5 +1,5 @@
 check how this integrates with state
 use specific traits instead of generic user -> DONE
 remove bytes requirement on authentication proof -> DONE
-merge cookies auth with session auth, in other words cookies as session backend
+merge cookies auth with session auth, in other words cookies as session backend 
 add feature flags
