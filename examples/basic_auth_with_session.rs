@@ -1,34 +1,28 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
-
-use axum::http::StatusCode;
-use axum::middleware::Next;
-use axum::response::Redirect;
-use axum::routing::post;
 use axum::{
     async_trait,
     extract::Request,
-    response::{IntoResponse, Response},
-    routing::get,
-    Router,
-};
-use axum::{middleware, Extension, Form};
-use axum_authnz::authentication::backends::basic_auth::BasicAuthCredentials;
-use axum_authnz::authentication::{
-    AuthManagerLayer, AuthUser, AuthenticationService, User, UserWithRoles,
-};
-use axum_authnz::authorization::backends::login_backend::LoginAuthorizationBackend;
-use axum_authnz::authorization::AuthorizationBuilder;
-use axum_authnz::transform::backends::session_auth_proof_transformer::SessionAuthProofTransformer;
-use axum_authnz::{
-    authentication::{AuthProof, AuthStateChange, AuthenticationBackend},
-    transform::AuthProofTransformerLayer,
+    http::StatusCode,
+    middleware::{self, Next},
+    response::{IntoResponse, Redirect, Response},
+    routing::{get, post},
+    Extension, Form, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use tower::ServiceBuilder;
-use tower_sessions::cookie::time::Duration;
-use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
+use tower_sessions::{cookie::time::Duration, MemoryStore, Session, SessionManagerLayer};
+
+use axum_authnz::{
+    authn::backends::basic_auth::{BasicAuthCredentials, BasicAuthProof},
+    authz::backends::{
+        login::LoginAuthzBackend,
+        role::{RoleAuthzBackend, UserWithRoles},
+    },
+    transform::backends::session_auth_proof_transformer::SessionAuthProofTransformer,
+    AuthProofTransformerLayer, Authn, AuthnBackend, AuthnLayer, AuthnStateChange, AuthzBuilder,
+    User,
+};
 
 type SessionAuthProof = MyUser;
 
@@ -37,9 +31,6 @@ struct MyUser {
     id: u128,
     roles: HashSet<String>,
 }
-
-impl User for MyUser {}
-impl AuthProof for MyUser {}
 
 impl UserWithRoles for MyUser {
     fn roles(&self) -> HashSet<String> {
@@ -63,11 +54,11 @@ impl IntoResponse for AuthenticationError {
     }
 }
 #[async_trait]
-impl AuthenticationBackend for DummyAuthenticationBackend {
+impl AuthnBackend for DummyAuthenticationBackend {
     type AuthProof = SessionAuthProof;
     type Credentials = BasicAuthCredentials; // Not used since we do not have login/logout as auth is stateless
     type Error = AuthenticationError;
-    type User = MyUser;
+    type UserData = MyUser;
 
     /// Logs in user
     ///
@@ -76,14 +67,14 @@ impl AuthenticationBackend for DummyAuthenticationBackend {
         &mut self,
         // ili requset: direkt
         credentials: Self::Credentials,
-    ) -> Result<AuthStateChange<Self::AuthProof>, Self::Error> {
+    ) -> Result<AuthnStateChange<Self::AuthProof>, Self::Error> {
         let user = self
             .users
             .get(&credentials)
             .ok_or(AuthenticationError::InvalidCredentials)
             .map(|user| user.clone())?;
 
-        Ok(AuthStateChange::LoggedIn(user))
+        Ok(AuthnStateChange::LoggedIn(user))
     }
 
     /// Logs out user
@@ -92,16 +83,17 @@ impl AuthenticationBackend for DummyAuthenticationBackend {
     async fn logout(
         &mut self,
         auth_proof: Self::AuthProof,
-    ) -> Result<AuthStateChange<Self::AuthProof>, Self::Error> {
-        Ok(AuthStateChange::LoggedOut(auth_proof))
+    ) -> Result<AuthnStateChange<Self::AuthProof>, Self::Error> {
+        Ok(AuthnStateChange::LoggedOut(auth_proof))
     }
 
     /// Verifies [crate::authentication::AuthProof] and returns the authenticated user
     async fn authenticate(
         &mut self,
         auth_proof: Self::AuthProof,
-    ) -> Result<AuthUser<Self::User>, Self::Error> {
-        Ok(AuthUser::Authenticated(auth_proof))
+    ) -> Result<User<Self::UserData>, Self::Error> {
+        // verifies the auth proof here...
+        Ok(User::Auth(auth_proof))
     }
 }
 
@@ -110,22 +102,22 @@ struct DummyAuthenticationBackend {
     pub users: HashMap<BasicAuthCredentials, MyUser>,
 }
 
-async fn root(user: AuthUser<MyUser>) -> impl IntoResponse {
+async fn root(user: User<MyUser>) -> impl IntoResponse {
     match user {
-        AuthUser::Authenticated(user) => {
+        User::Auth(user) => {
             format!("Hello user: {}", user.id)
         }
-        AuthUser::Unaunthenticated => {
+        User::Anon => {
             format!("Hello anonymous one")
         }
     }
 }
 
 async fn login(
-    mut authentication_service: AuthenticationService<DummyAuthenticationBackend>,
+    mut authn: Authn<DummyAuthenticationBackend>,
     credentials: Form<BasicAuthCredentials>,
 ) -> Response {
-    let login_result = authentication_service.login(credentials.0).await;
+    let login_result = authn.login(credentials.0).await;
 
     match login_result {
         Ok(auth_state_change) => (auth_state_change, Redirect::to("/")).into_response(),
@@ -134,14 +126,14 @@ async fn login(
 }
 
 async fn logout(
-    mut authentication_service: AuthenticationService<DummyAuthenticationBackend>,
+    mut authn: Authn<DummyAuthenticationBackend>,
     auth_proof: Option<Extension<SessionAuthProof>>,
 ) -> impl IntoResponse {
     if let Some(auth_proof) = auth_proof {
-        let logout_result = authentication_service.logout(auth_proof.0).await;
+        let logout_result = authn.logout(auth_proof.0).await;
 
         match logout_result {
-            Ok(auth_state_change) => (auth_state_change, Redirect::to("/login")).into_response(),
+            Ok(authn_state_change) => (authn_state_change, Redirect::to("/login")).into_response(),
             Err(e) => e.into_response(),
         }
     } else {
@@ -170,11 +162,10 @@ async fn main() {
         SessionAuthProofTransformer,
     >::new(SessionAuthProofTransformer::new("auth_proof"));
 
-    let authentication_backend = DummyAuthenticationBackend { users };
-    let authentication_layer = AuthManagerLayer::new(authentication_backend);
+    let authn_backend = DummyAuthenticationBackend { users };
+    let authn_layer = AuthnLayer::new(authn_backend);
 
-    let authorization_layer =
-        AuthorizationBuilder::new(LoginAuthorizationBackend::<MyUser>::new()).build();
+    let authz_layer = AuthzBuilder::new(LoginAuthzBackend::<MyUser>::new()).build();
 
     async fn propagate_session_to_response(req: Request, next: Next) -> Response {
         let session = req.extensions().get::<Session>().cloned();
@@ -194,13 +185,13 @@ async fn main() {
 
     let app = Router::new()
         .route("/login", post(login))
-        .route("/logout", post(logout).layer(authorization_layer))
+        .route("/logout", post(logout).layer(authz_layer))
         .route("/", get(root))
         .route_layer(
             ServiceBuilder::new()
                 .layer(session_layer)
                 .layer(auth_proof_transfomer_layer)
-                .layer(authentication_layer)
+                .layer(authn_layer)
                 .layer(middleware::from_fn(propagate_session_to_response)),
         );
 

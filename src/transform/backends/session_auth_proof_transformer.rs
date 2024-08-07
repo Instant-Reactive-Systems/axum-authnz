@@ -8,10 +8,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 use tower_sessions::Session;
 
-use crate::{
-    authentication::{AuthProof, AuthStateChange},
-    transform::AuthProofTransformer,
-};
+use crate::{AuthProofTransformer, AuthnStateChange};
 
 #[derive(Debug, Clone)]
 pub struct SessionAuthProofTransformer {
@@ -19,10 +16,10 @@ pub struct SessionAuthProofTransformer {
 }
 
 impl SessionAuthProofTransformer {
-    /// Creates a new SessionAuthProofTransformer with the specified auth_proof_key
-    /// # Arguments
+    /// Creates a new SessionAuthProofTransformer with the specified auth_proof_key.
     ///
-    /// * `auth_proof_key` - Cookie name which will be used for the authentication proof
+    /// # Arguments
+    /// * `auth_proof_key` - Cookie name which will be used for the authentication proof.
     pub fn new(auth_proof_key: impl Into<String>) -> Self {
         Self {
             auth_proof_key: auth_proof_key.into(),
@@ -31,16 +28,13 @@ impl SessionAuthProofTransformer {
 }
 
 #[async_trait]
-impl<
-        AuthnProof: AuthProof + 'static + Serialize + for<'de> Deserialize<'de> + DeserializeOwned,
-    > AuthProofTransformer<AuthnProof> for SessionAuthProofTransformer
+impl<AuthProof> AuthProofTransformer<AuthProof> for SessionAuthProofTransformer
+where
+    AuthProof:
+        Clone + Send + Sync + Serialize + for<'de> Deserialize<'de> + DeserializeOwned + 'static,
 {
     type Error = SessionAuthError;
 
-    /// Inserts [crate::authentication::AuthProof] into the request and returns the modified request with [crate::authentication::AuthProof]
-    /// inserted into extensions
-    ///
-    /// Refer to [https://github.com/tokio-rs/axum/blob/main/examples/consume-body-in-extractor-or-middleware/src/main.rs]
     async fn insert_auth_proof(&mut self, mut request: Request) -> Result<Request, Self::Error> {
         let session = request.extensions().get::<Session>().cloned(); // TODO: Or just use seflf, check which is better, also check clones and possible optimizations everywhere
 
@@ -49,8 +43,7 @@ impl<
             None => return Ok(request),
         };
 
-        if let Some(auth_proof) = session.get::<AuthnProof>(&self.auth_proof_key).await? {
-            println!("Got auth proof");
+        if let Some(auth_proof) = session.get::<AuthProof>(&self.auth_proof_key).await? {
             request.extensions_mut().insert(auth_proof);
             Ok(request)
         } else {
@@ -58,10 +51,6 @@ impl<
         }
     }
 
-    /// Receives and handles [crate::authentication::AuthStateChange] in response extensions
-    ///
-    /// For example for session based auth and the LoggedIn event we would insert a new session and return the modified response which contains the session id
-    /// [crate::authentication::AuthProof] into it so we can identify the user on new requests
     async fn process_auth_state_change(
         &mut self,
         response: Response,
@@ -73,14 +62,14 @@ impl<
             None => return Ok(response),
         };
 
-        if let Some(auth_state_change) = response.extensions().get::<AuthStateChange<AuthnProof>>()
+        if let Some(auth_state_change) = response.extensions().get::<AuthnStateChange<AuthProof>>()
         {
             match auth_state_change {
-                AuthStateChange::LoggedIn(auth_proof) => {
+                AuthnStateChange::LoggedIn(auth_proof) => {
                     session.cycle_id().await?;
                     session.insert(&self.auth_proof_key, auth_proof).await?;
                 }
-                AuthStateChange::LoggedOut(_) => {
+                AuthnStateChange::LoggedOut(_) => {
                     session.flush().await?;
                 }
             }
@@ -103,7 +92,7 @@ impl IntoResponse for SessionAuthError {
         match self {
             Self::MissingSesssionManagerLayer => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Is 'SessionManagerLayer` enabled?",
+                "Is SessionManagerLayer enabled?",
             )
                 .into_response(),
             Self::SessionError(_) => (
