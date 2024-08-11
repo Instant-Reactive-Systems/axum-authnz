@@ -14,17 +14,17 @@ use tower::ServiceBuilder;
 use tower_sessions::{cookie::time::Duration, MemoryStore, Session, SessionManagerLayer};
 
 use axum_authnz::{
-    authn::backends::basic_auth::{BasicAuthCredentials, BasicAuthProof},
+    authn::backends::basic_auth::{BasicAuthCredentials, BasicAuthnProof},
     authz::backends::{
         login::LoginAuthzBackend,
         role::{RoleAuthzBackend, UserWithRoles},
     },
-    transform::backends::session_auth_proof_transformer::SessionAuthProofTransformer,
-    AuthProofTransformerLayer, Authn, AuthnBackend, AuthnLayer, AuthnStateChange, AuthzBuilder,
+    transform::backends::session_authn_proof_transformer::SessionAuthnProofTransformer,
+    AuthnProofTransformerLayer, Authn, AuthnBackend, AuthnLayer, AuthnStateChange, AuthzBuilder,
     User,
 };
 
-type SessionAuthProof = MyUser;
+type SessionAuthnProof = MyUser;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MyUser {
@@ -55,7 +55,7 @@ impl IntoResponse for AuthenticationError {
 }
 #[async_trait]
 impl AuthnBackend for DummyAuthenticationBackend {
-    type AuthProof = SessionAuthProof;
+    type AuthnProof = SessionAuthnProof;
     type Credentials = BasicAuthCredentials; // Not used since we do not have login/logout as auth is stateless
     type Error = AuthenticationError;
     type UserData = MyUser;
@@ -67,7 +67,7 @@ impl AuthnBackend for DummyAuthenticationBackend {
         &mut self,
         // ili requset: direkt
         credentials: Self::Credentials,
-    ) -> Result<AuthnStateChange<Self::AuthProof>, Self::Error> {
+    ) -> Result<AuthnStateChange<Self::AuthnProof>, Self::Error> {
         let user = self
             .users
             .get(&credentials)
@@ -82,18 +82,18 @@ impl AuthnBackend for DummyAuthenticationBackend {
     /// Should be called in logout route handlers and returned in response to propagate changes to transform layer.
     async fn logout(
         &mut self,
-        auth_proof: Self::AuthProof,
-    ) -> Result<AuthnStateChange<Self::AuthProof>, Self::Error> {
-        Ok(AuthnStateChange::LoggedOut(auth_proof))
+        authn_proof: Self::AuthnProof,
+    ) -> Result<AuthnStateChange<Self::AuthnProof>, Self::Error> {
+        Ok(AuthnStateChange::LoggedOut(authn_proof))
     }
 
-    /// Verifies [crate::authentication::AuthProof] and returns the authenticated user
+    /// Verifies [crate::authentication::AuthnProof] and returns the authenticated user
     async fn authenticate(
         &mut self,
-        auth_proof: Self::AuthProof,
+        authn_proof: Self::AuthnProof,
     ) -> Result<User<Self::UserData>, Self::Error> {
         // verifies the auth proof here...
-        Ok(User::Auth(auth_proof))
+        Ok(User::Auth(authn_proof))
     }
 }
 
@@ -127,10 +127,10 @@ async fn login(
 
 async fn logout(
     mut authn: Authn<DummyAuthenticationBackend>,
-    auth_proof: Option<Extension<SessionAuthProof>>,
+    authn_proof: Option<Extension<SessionAuthnProof>>,
 ) -> impl IntoResponse {
-    if let Some(auth_proof) = auth_proof {
-        let logout_result = authn.logout(auth_proof.0).await;
+    if let Some(authn_proof) = authn_proof {
+        let logout_result = authn.logout(authn_proof.0).await;
 
         match logout_result {
             Ok(authn_state_change) => (authn_state_change, Redirect::to("/login")).into_response(),
@@ -157,10 +157,10 @@ async fn main() {
         .with_secure(false)
         .with_expiry(tower_sessions::Expiry::OnInactivity(Duration::hours(5)));
 
-    let auth_proof_transfomer_layer = AuthProofTransformerLayer::<
-        SessionAuthProof,
-        SessionAuthProofTransformer,
-    >::new(SessionAuthProofTransformer::new("auth_proof"));
+    let authn_proof_transfomer_layer = AuthnProofTransformerLayer::<
+        SessionAuthnProof,
+        SessionAuthnProofTransformer,
+    >::new(SessionAuthnProofTransformer::new("authn_proof"));
 
     let authn_backend = DummyAuthenticationBackend { users };
     let authn_layer = AuthnLayer::new(authn_backend);
@@ -190,7 +190,7 @@ async fn main() {
         .route_layer(
             ServiceBuilder::new()
                 .layer(session_layer)
-                .layer(auth_proof_transfomer_layer)
+                .layer(authn_proof_transfomer_layer)
                 .layer(authn_layer)
                 .layer(middleware::from_fn(propagate_session_to_response)),
         );

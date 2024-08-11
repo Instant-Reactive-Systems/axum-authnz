@@ -1,17 +1,17 @@
 use axum::{async_trait, extract::Request, response::Response};
 use std::convert::Infallible;
 
-use crate::AuthProofTransformer;
+use crate::transform::AuthnProofTransformer;
 
-/// A stateless [crate::transform::AuthProofTransformer] implementation that extracts authentication
+/// A stateless [crate::transform::AuthnProofTransformer] implementation that extracts authentication
 /// proof from a http header.
 #[derive(Debug, Clone)]
-pub struct HeaderAuthProofTransformer {
+pub struct HeaderAuthnProofTransformer {
     header: String,
 }
 
-impl HeaderAuthProofTransformer {
-    /// Creates a new instance of HeaderAuthProofTransformer with the provided header used for
+impl HeaderAuthnProofTransformer {
+    /// Creates a new instance of HeaderAuthnProofTransformer with the provided header used for
     /// authentication proof extraction.
     pub fn new(header: String) -> Self {
         Self { header }
@@ -19,20 +19,20 @@ impl HeaderAuthProofTransformer {
 }
 
 #[async_trait]
-impl<AuthProof> AuthProofTransformer<AuthProof> for HeaderAuthProofTransformer
+impl<AuthnProof> AuthnProofTransformer<AuthnProof> for HeaderAuthnProofTransformer
 where
-    AuthProof: Clone + Send + Sync + TryFrom<Vec<u8>> + 'static,
+    AuthnProof: Clone + Send + Sync + TryFrom<Vec<u8>> + 'static,
 {
     type Error = Infallible;
 
-    async fn insert_auth_proof(&mut self, mut request: Request) -> Result<Request, Self::Error> {
+    async fn insert_authn_proof(&mut self, mut request: Request) -> Result<Request, Self::Error> {
         if let Some(header) = request.headers().get(&self.header) {
-            let auth_proof: Result<AuthProof, <AuthProof as TryFrom<Vec<u8>>>::Error> =
+            let authn_proof: Result<AuthnProof, <AuthnProof as TryFrom<Vec<u8>>>::Error> =
                 header.as_bytes().to_vec().try_into();
 
-            match auth_proof {
-                Ok(auth_proof) => {
-                    request.extensions_mut().insert(auth_proof);
+            match authn_proof {
+                Ok(authn_proof) => {
+                    request.extensions_mut().insert(authn_proof);
                     Ok(request)
                 }
                 Err(_err) => {
@@ -47,11 +47,11 @@ where
         }
     }
 
-    async fn process_auth_state_change(
+    async fn process_authn_state_change(
         &mut self,
         response: Response,
     ) -> Result<Response, Self::Error> {
-        // We do not process any auth state changes as this AuthProofTransformer is stateless.
+        // We do not process any auth state changes as this AuthnProofTransformer is stateless.
         Ok(response)
     }
 }

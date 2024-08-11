@@ -1,2 +1,2 @@
-pub mod header_auth_proof_transformer;
-pub mod session_auth_proof_transformer;
+pub mod header_authn_proof_transformer;
+pub mod session_authn_proof_transformer;

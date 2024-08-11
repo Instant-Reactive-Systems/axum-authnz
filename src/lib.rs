@@ -12,4 +12,4 @@ pub mod transform;
 
 pub use authn::{Authn, AuthnBackend, AuthnLayer, AuthnStateChange, User};
 pub use authz::{AuthzBackend, AuthzBuilder, AuthzLayer};
-pub use transform::{AuthProofTransformer, AuthProofTransformerLayer};
+pub use transform::{AuthnProofTransformer, AuthnProofTransformerLayer};

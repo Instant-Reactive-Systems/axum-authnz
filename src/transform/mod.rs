@@ -23,46 +23,46 @@ use tower::{Layer, Service};
 /// an authentication proof.
 ///
 /// For example:
-///     - HeaderAuthProofTransformer extracts an authentication proof
+///     - HeaderAuthnProofTransformer extracts an authentication proof
 ///       from the request header using no state, ignores login/logout event,
 ///       useful for services that only do authentication with no login/logout flows.
-///     - SessionAuthProofTransformer extracts an authentication proof from http sessions
+///     - SessionAuthnProofTransformer extracts an authentication proof from http sessions
 ///       using tower sessions and creates/destroys the session upon login/logout requests.
 #[async_trait]
-pub trait AuthProofTransformer<AuthProof>: std::fmt::Debug + Clone + Send + Sync + 'static {
+pub trait AuthnProofTransformer<AuthnProof>: std::fmt::Debug + Clone + Send + Sync + 'static {
     type Error: Send + Sync + IntoResponse;
 
     /// Inserts an authentication proof into the request and returns the modified request
     /// with the authentication proof inserted into the request extensions.
     ///
     /// Refer to [https://github.com/tokio-rs/axum/blob/main/examples/consume-body-in-extractor-or-middleware/src/main.rs]
-    async fn insert_auth_proof(&mut self, request: Request) -> Result<Request, Self::Error>;
+    async fn insert_authn_proof(&mut self, request: Request) -> Result<Request, Self::Error>;
 
     /// Receives and handles an [`crate::authn::AuthStateChange`] from the response extensions.
     ///
     /// For example, for session based auth and the LoggedIn event,
     /// we would insert a new session and return the modified response
     /// which contains the session id.
-    async fn process_auth_state_change(
+    async fn process_authn_state_change(
         &mut self,
         response: Response,
     ) -> Result<Response, Self::Error>;
 }
 
-/// A request extension that exposes a way to interact with the [`AuthProofTransformer`].
+/// A request extension that exposes a way to interact with the [`AuthnProofTransformer`].
 #[derive(Debug, Clone)]
-pub struct AuthProofTransformerService<S, AuthProof, B>
+pub struct AuthnProofTransformerService<S, AuthnProof, B>
 where
-    B: AuthProofTransformer<AuthProof>,
+    B: AuthnProofTransformer<AuthnProof>,
 {
     inner: S,
     backend: B,
-    _marker: PhantomData<AuthProof>,
+    _marker: PhantomData<AuthnProof>,
 }
 
-impl<S, AuthProof, B> AuthProofTransformerService<S, AuthProof, B>
+impl<S, AuthnProof, B> AuthnProofTransformerService<S, AuthnProof, B>
 where
-    B: AuthProofTransformer<AuthProof>,
+    B: AuthnProofTransformer<AuthnProof>,
 {
     pub fn new(inner: S, backend: B) -> Self {
         Self {
@@ -73,11 +73,11 @@ where
     }
 }
 
-impl<S, AuthProof, B> Service<Request> for AuthProofTransformerService<S, AuthProof, B>
+impl<S, AuthnProof, B> Service<Request> for AuthnProofTransformerService<S, AuthnProof, B>
 where
     S: Service<Request, Response = Response> + Clone + Send + 'static,
     S::Future: Send + 'static,
-    B: AuthProofTransformer<AuthProof> + 'static,
+    B: AuthnProofTransformer<AuthnProof> + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -99,14 +99,14 @@ where
         let mut inner = std::mem::replace(&mut self.inner, clone);
 
         Box::pin(async move {
-            let req = match backend.insert_auth_proof(req).await {
+            let req = match backend.insert_authn_proof(req).await {
                 Ok(req) => req,
                 Err(err) => return Ok(err.into_response()),
             };
 
             let resp = inner.call(req).await?;
 
-            let resp = match backend.process_auth_state_change(resp).await {
+            let resp = match backend.process_authn_state_change(resp).await {
                 Ok(resp) => resp,
                 Err(err) => return Ok(err.into_response()),
             };
@@ -117,17 +117,17 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct AuthProofTransformerLayer<AuthProof, B>
+pub struct AuthnProofTransformerLayer<AuthnProof, B>
 where
-    B: AuthProofTransformer<AuthProof>,
+    B: AuthnProofTransformer<AuthnProof>,
 {
     backend: B,
-    _marker: PhantomData<AuthProof>,
+    _marker: PhantomData<AuthnProof>,
 }
 
-impl<AuthProof, B> AuthProofTransformerLayer<AuthProof, B>
+impl<AuthnProof, B> AuthnProofTransformerLayer<AuthnProof, B>
 where
-    B: AuthProofTransformer<AuthProof>,
+    B: AuthnProofTransformer<AuthnProof>,
 {
     pub fn new(backend: B) -> Self {
         Self {
@@ -137,13 +137,13 @@ where
     }
 }
 
-impl<S, AuthProof, B> Layer<S> for AuthProofTransformerLayer<AuthProof, B>
+impl<S, AuthnProof, B> Layer<S> for AuthnProofTransformerLayer<AuthnProof, B>
 where
-    B: AuthProofTransformer<AuthProof>,
+    B: AuthnProofTransformer<AuthnProof>,
 {
-    type Service = AuthProofTransformerService<S, AuthProof, B>;
+    type Service = AuthnProofTransformerService<S, AuthnProof, B>;
 
     fn layer(&self, service: S) -> Self::Service {
-        AuthProofTransformerService::new(service, self.backend.clone())
+        AuthnProofTransformerService::new(service, self.backend.clone())
     }
 }
