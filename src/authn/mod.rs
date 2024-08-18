@@ -67,7 +67,7 @@ where
 /// The authentication backend is responsible for handling login/logout requests and verifying authentication proof which is extracted by the transform layer.
 #[async_trait]
 pub trait AuthnBackend: std::fmt::Debug + Clone + Send + Sync + 'static {
-    type AuthProof: Clone + Send + Sync + 'static;
+    type AuthnProof: Clone + Send + Sync + 'static;
     type Credentials: Clone + Send + Sync + 'static;
     type Error: std::error::Error + Send + Sync + IntoResponse;
     type UserData: Send + Sync + Clone + 'static;
@@ -79,7 +79,7 @@ pub trait AuthnBackend: std::fmt::Debug + Clone + Send + Sync + 'static {
     async fn login(
         &mut self,
         credentials: Self::Credentials,
-    ) -> Result<AuthnStateChange<Self::AuthProof>, Self::Error>;
+    ) -> Result<AuthnStateChange<Self::AuthnProof>, Self::Error>;
 
     /// Purges a user's authentication proof and logs him out.
     ///
@@ -87,8 +87,8 @@ pub trait AuthnBackend: std::fmt::Debug + Clone + Send + Sync + 'static {
     /// Should be called in `logout` route handlers and returned in response to propagate changes to transform layer.
     async fn logout(
         &mut self,
-        authn_proof: Self::AuthProof,
-    ) -> Result<AuthnStateChange<Self::AuthProof>, Self::Error>;
+        authn_proof: Self::AuthnProof,
+    ) -> Result<AuthnStateChange<Self::AuthnProof>, Self::Error>;
 
     /// Verifies the provided [`crate::authentication::AuthProof`] and returns a [`User`].
     ///
@@ -96,7 +96,7 @@ pub trait AuthnBackend: std::fmt::Debug + Clone + Send + Sync + 'static {
     /// Authorization should not be implemented in this layer, instead use authorization layer with [crate::authorization::backends::login_backend].
     async fn authenticate(
         &mut self,
-        auth_proof: Self::AuthProof,
+        authn_proof: Self::AuthnProof,
     ) -> Result<User<Self::UserData>, Self::Error>;
 }
 
@@ -186,7 +186,7 @@ where
         let mut inner = std::mem::replace(&mut self.inner, clone);
 
         Box::pin(async move {
-            let authn_proof = req.extensions().get::<B::AuthProof>();
+            let authn_proof = req.extensions().get::<B::AuthnProof>();
 
             if let Some(authn_proof) = authn_proof {
                 match authn_extension.authenticate(authn_proof.clone()).await {

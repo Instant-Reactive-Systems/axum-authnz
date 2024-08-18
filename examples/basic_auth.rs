@@ -6,10 +6,10 @@ use std::{
 use tower::ServiceBuilder;
 
 use axum_authnz::{
-    authn::backends::basic_auth::BasicAuthProof,
+    authn::backends::basic_auth::BasicAuthnProof,
     authz::backends::role::{RoleAuthzBackend, UserWithRoles},
-    transform::backends::header_auth_proof_transformer::HeaderAuthProofTransformer,
-    AuthProofTransformerLayer, AuthnBackend, AuthnLayer, AuthnStateChange, AuthzBuilder, User,
+    transform::backends::header_authn_proof_transformer::HeaderAuthnProofTransformer,
+    AuthnProofTransformerLayer, AuthnBackend, AuthnLayer, AuthnStateChange, AuthzBuilder, User,
 };
 
 #[derive(Debug, Clone)]
@@ -26,36 +26,36 @@ impl UserWithRoles for MyUser {
 
 #[async_trait]
 impl AuthnBackend for BasicAuthnBackend {
-    type AuthProof = BasicAuthProof;
+    type AuthnProof = BasicAuthnProof;
     type Credentials = (); // Not used since we do not have login/logout as auth is stateless
     type Error = Infallible;
     type UserData = MyUser;
 
     // Logs in user
     //
-    // Not used for this AuthenticationBackend since AuthProof=Credentials, there is no use for the login operation
+    // Not used for this AuthenticationBackend since AuthnProof=Credentials, there is no use for the login operation
     async fn login(
         &mut self,
         // ili requset: direkt
         _credentials: Self::Credentials,
-    ) -> Result<AuthnStateChange<Self::AuthProof>, Self::Error> {
+    ) -> Result<AuthnStateChange<Self::AuthnProof>, Self::Error> {
         unimplemented!()
     }
 
     // Logs out user
     //
-    // Not used for this AuthenticationBackend since AuthProof=Credentials, there is no use for the logout operation
+    // Not used for this AuthenticationBackend since AuthnProof=Credentials, there is no use for the logout operation
     async fn logout(
         &mut self,
-        _auth_proof: Self::AuthProof,
-    ) -> Result<AuthnStateChange<Self::AuthProof>, Self::Error> {
+        _authn_proof: Self::AuthnProof,
+    ) -> Result<AuthnStateChange<Self::AuthnProof>, Self::Error> {
         unimplemented!()
     }
 
     // Checks if user is stored in local hashmap of users
     async fn authenticate(
         &mut self,
-        auth_proof: Self::AuthProof,
+        auth_proof: Self::AuthnProof,
     ) -> Result<User<Self::UserData>, Self::Error> {
         let result = self
             .users
@@ -68,7 +68,7 @@ impl AuthnBackend for BasicAuthnBackend {
 
 #[derive(Debug, Clone)]
 struct BasicAuthnBackend {
-    pub users: HashMap<BasicAuthProof, MyUser>,
+    pub users: HashMap<BasicAuthnProof, MyUser>,
 }
 
 async fn root(user: User<MyUser>) -> impl IntoResponse {
@@ -86,7 +86,7 @@ async fn root(user: User<MyUser>) -> impl IntoResponse {
 async fn main() {
     let mut users = HashMap::new();
     users.insert(
-        BasicAuthProof::new("username", "password"),
+        BasicAuthnProof::new("username", "password"),
         MyUser {
             id: 0,
             roles: HashSet::from(["Einar".to_owned(), "Olaf".to_owned(), "Harald".to_owned()]),
@@ -94,8 +94,8 @@ async fn main() {
     );
 
     let auth_proof_transfomer_layer =
-        AuthProofTransformerLayer::<BasicAuthProof, HeaderAuthProofTransformer>::new(
-            HeaderAuthProofTransformer::new("Authorization".into()),
+        AuthnProofTransformerLayer::<BasicAuthnProof, HeaderAuthnProofTransformer>::new(
+            HeaderAuthnProofTransformer::new("Authorization".into()),
         );
 
     let authn_backend = BasicAuthnBackend { users };
