@@ -27,7 +27,8 @@ where
 
     async fn insert_authn_proof(&mut self, mut request: Request) -> Result<Request, Self::Error> {
         if let Some(header) = request.headers().get(&self.header_key) {
-            let authn_proof: Result<AuthnProof, <AuthnProof as TryFrom<HeaderValue>>::Error> = header.clone().try_into();
+            let authn_proof: Result<AuthnProof, <AuthnProof as TryFrom<HeaderValue>>::Error> =
+                header.clone().try_into();
 
             match authn_proof {
                 Ok(authn_proof) => {
@@ -45,5 +46,4 @@ where
             Ok(request)
         }
     }
-
 }

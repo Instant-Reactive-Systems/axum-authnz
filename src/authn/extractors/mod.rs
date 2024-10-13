@@ -30,7 +30,6 @@ pub trait AuthnProofExtractor<AuthnProof>: std::fmt::Debug + Clone + Send + Sync
     ///
     /// Refer to [https://github.com/tokio-rs/axum/blob/main/examples/consume-body-in-extractor-or-middleware/src/main.rs]
     async fn insert_authn_proof(&mut self, request: Request) -> Result<Request, Self::Error>;
-
 }
 
 /// A request extension that exposes a way to interact with the [`AuthnProofExtractor`].
@@ -89,7 +88,6 @@ where
             };
 
             let resp = inner.call(req).await?;
-
 
             Ok(resp)
         })

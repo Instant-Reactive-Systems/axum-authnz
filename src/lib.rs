@@ -8,5 +8,5 @@ pub mod authn;
 /// Contains authorization layer core traits and implementations.
 pub mod authz;
 
-pub use authn::{Authn, AuthnBackend, AuthnLayer, AuthnStateChange, AuthnUser, extractors::*};
+pub use authn::{extractors::*, Authn, AuthnBackend, AuthnLayer, AuthnStateChange, AuthnUser};
 pub use authz::{AuthzBackend, AuthzBuilder, AuthzLayer};

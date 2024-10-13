@@ -1,7 +1,7 @@
 use axum::{async_trait, http::request::Parts};
 use std::{convert::Infallible, marker::PhantomData};
 
-use crate::{AuthzBackend, AuthnUser};
+use crate::{AuthnUser, AuthzBackend};
 
 #[derive(Debug, Clone)]
 pub struct LoginAuthzBackend<U> {
