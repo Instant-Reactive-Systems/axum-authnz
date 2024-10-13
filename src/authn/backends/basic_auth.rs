@@ -1,13 +1,14 @@
 use base64::Engine;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub type BasicAuthCredentials = BasicAuthnProof;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BasicAuthnProof {
-    username: String,
-    password: String,
+    pub username: String,
+    pub password: String,
 }
 
 impl BasicAuthnProof {
