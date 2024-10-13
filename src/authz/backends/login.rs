@@ -1,7 +1,7 @@
 use axum::{async_trait, http::request::Parts};
 use std::{convert::Infallible, marker::PhantomData};
 
-use crate::{AuthzBackend, User};
+use crate::{AuthzBackend, AuthnUser};
 
 #[derive(Debug, Clone)]
 pub struct LoginAuthzBackend<U> {
@@ -23,12 +23,12 @@ impl<U: std::fmt::Debug + Send + Sync + Clone + 'static> AuthzBackend<U> for Log
     async fn authorize(&self, req_parts: &Parts) -> Result<bool, Self::Error> {
         let user = req_parts
             .extensions
-            .get::<User<U>>()
+            .get::<AuthnUser<U>>()
             .expect("Is AuthnLayer enabled?");
 
         match user {
-            User::Auth(_) => Ok(true),
-            User::Anon => Ok(false),
+            AuthnUser::Auth(_) => Ok(true),
+            AuthnUser::Anon => Ok(false),
         }
     }
 }

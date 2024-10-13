@@ -1,6 +1,7 @@
 //! Contains authentication layer core traits and their implementations
 
 pub mod backends;
+pub mod extractors;
 
 use axum::{
     async_trait,
@@ -18,14 +19,14 @@ use tower::{Layer, Service};
 
 /// Represents a change in a user's authentication state.
 #[derive(Debug, Clone)]
-pub enum AuthnStateChange<AuthProof> {
-    LoggedIn(AuthProof),
-    LoggedOut(AuthProof),
+pub enum AuthnStateChange<AuthnProof> {
+    LoggedIn(AuthnProof),
+    LoggedOut(AuthnProof),
 }
 
-impl<AuthProof> IntoResponseParts for AuthnStateChange<AuthProof>
+impl<AuthnProof> IntoResponseParts for AuthnStateChange<AuthnProof>
 where
-    AuthProof: Clone + Send + Sync + 'static,
+    AuthnProof: Clone + Send + Sync + 'static,
 {
     type Error = Infallible;
 
@@ -40,7 +41,7 @@ where
 
 /// Represents an authenticated or anonymous user.
 #[derive(Debug, Clone)]
-pub enum User<Data> {
+pub enum AuthnUser<Data> {
     /// Authenticated user with his own data.
     Auth(Data),
     /// Anonymous user.
@@ -48,14 +49,14 @@ pub enum User<Data> {
 }
 
 #[async_trait]
-impl<Data, S> FromRequestParts<S> for User<Data>
+impl<Data, S> FromRequestParts<S> for AuthnUser<Data>
 where
     Data: Clone + Send + Sync + 'static,
 {
     type Rejection = (StatusCode, &'static str);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts.extensions.get::<User<Data>>().cloned().ok_or((
+        parts.extensions.get::<AuthnUser<Data>>().cloned().ok_or((
             StatusCode::INTERNAL_SERVER_ERROR,
             "Can't extract User. Is AuthnLayer enabled?",
         ))
@@ -68,36 +69,17 @@ where
 #[async_trait]
 pub trait AuthnBackend: std::fmt::Debug + Clone + Send + Sync + 'static {
     type AuthnProof: Clone + Send + Sync + 'static;
-    type Credentials: Clone + Send + Sync + 'static;
     type Error: std::error::Error + Send + Sync + IntoResponse;
     type UserData: Send + Sync + Clone + 'static;
 
-    /// Authenticates a user's credentials and logs him in.
-    ///
-    /// # Note
-    /// Should be called in `login` route handlers and returned in response to propagate changes to transform layer.
-    async fn login(
-        &mut self,
-        credentials: Self::Credentials,
-    ) -> Result<AuthnStateChange<Self::AuthnProof>, Self::Error>;
-
-    /// Purges a user's authentication proof and logs him out.
-    ///
-    /// # Note
-    /// Should be called in `logout` route handlers and returned in response to propagate changes to transform layer.
-    async fn logout(
-        &mut self,
-        authn_proof: Self::AuthnProof,
-    ) -> Result<AuthnStateChange<Self::AuthnProof>, Self::Error>;
-
-    /// Verifies the provided [`crate::authentication::AuthProof`] and returns a [`User`].
+    /// Verifies the provided [`crate::authentication::AuthnProof`] and returns a [`User`].
     ///
     /// # Note
     /// Authorization should not be implemented in this layer, instead use authorization layer with [crate::authorization::backends::login_backend].
     async fn authenticate(
         &mut self,
         authn_proof: Self::AuthnProof,
-    ) -> Result<User<Self::UserData>, Self::Error>;
+    ) -> Result<AuthnUser<Self::UserData>, Self::Error>;
 }
 
 /// A request extension that exposes a way to interact with the [`AuthnBackend`].
@@ -194,7 +176,7 @@ where
                     Err(err) => return Ok(err.into_response()),
                 };
             } else {
-                req.extensions_mut().insert(User::<B::UserData>::Anon);
+                req.extensions_mut().insert(AuthnUser::<B::UserData>::Anon);
             }
 
             req.extensions_mut().insert(authn_extension);

@@ -7,9 +7,6 @@
 pub mod authn;
 /// Contains authorization layer core traits and implementations.
 pub mod authz;
-/// Contains transform layer core traits and implementations.
-pub mod transform;
 
-pub use authn::{Authn, AuthnBackend, AuthnLayer, AuthnStateChange, User};
+pub use authn::{Authn, AuthnBackend, AuthnLayer, AuthnStateChange, AuthnUser, extractors::*};
 pub use authz::{AuthzBackend, AuthzBuilder, AuthzLayer};
-pub use transform::{AuthnProofTransformer, AuthnProofTransformerLayer};
