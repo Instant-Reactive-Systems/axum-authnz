@@ -58,7 +58,7 @@ where
             .first
             .authorize(req_parts)
             .await
-            .map_err(|err| OrAuthzBackendError::FirstOperandError(err))?;
+            .map_err(OrAuthzBackendError::FirstOperandError)?;
 
         if first {
             Ok(first)
@@ -67,7 +67,7 @@ where
                 .second
                 .authorize(req_parts)
                 .await
-                .map_err(|err| OrAuthzBackendError::SecondOperandError(err))?;
+                .map_err(OrAuthzBackendError::SecondOperandError)?;
             Ok(second)
         }
     }
@@ -125,14 +125,14 @@ where
             .first
             .authorize(req_parts)
             .await
-            .map_err(|err| AndAuthzBackendError::FirstOperandError(err))?;
+            .map_err(AndAuthzBackendError::FirstOperandError)?;
 
         if first {
             let second = self
                 .second
                 .authorize(req_parts)
                 .await
-                .map_err(|err| AndAuthzBackendError::SecondOperandError(err))?;
+                .map_err(AndAuthzBackendError::SecondOperandError)?;
 
             Ok(second)
         } else {

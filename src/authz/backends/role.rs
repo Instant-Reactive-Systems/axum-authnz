@@ -2,7 +2,7 @@ use std::{convert::Infallible, marker::PhantomData};
 
 use axum::{async_trait, http::request::Parts};
 
-use crate::{Authn, AuthnUser, AuthzBackend};
+use crate::{AuthnUser, AuthzBackend};
 
 /// Allows the request only if the user has the specified role.
 #[derive(Debug, Clone)]

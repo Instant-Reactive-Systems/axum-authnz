@@ -1,5 +1,4 @@
-use axum::{async_trait, extract::Request, http::HeaderValue, response::Response};
-use axum_extra::headers::Header;
+use axum::{async_trait, extract::Request, http::HeaderValue};
 use std::convert::Infallible;
 
 use crate::authn::extractors::AuthnProofExtractor;

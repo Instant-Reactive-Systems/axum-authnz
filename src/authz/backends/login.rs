@@ -8,6 +8,12 @@ pub struct LoginAuthzBackend<U> {
     _marker: PhantomData<U>,
 }
 
+impl<U> Default for LoginAuthzBackend<U> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<U> LoginAuthzBackend<U> {
     pub fn new() -> Self {
         LoginAuthzBackend {
