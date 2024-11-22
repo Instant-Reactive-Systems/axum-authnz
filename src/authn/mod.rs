@@ -69,7 +69,7 @@ where
 #[async_trait]
 pub trait AuthnBackend: std::fmt::Debug + Clone + Send + Sync + 'static {
     type AuthnProof: Clone + Send + Sync + 'static;
-    type Error: std::error::Error + Send + Sync + IntoResponse;
+    type Error: Send + Sync + IntoResponse;
     type UserData: Send + Sync + Clone + 'static;
 
     /// Verifies the provided [`crate::authentication::AuthnProof`] and returns a [`User`].
