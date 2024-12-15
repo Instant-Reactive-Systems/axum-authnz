@@ -2,7 +2,7 @@ use std::{convert::Infallible, marker::PhantomData};
 
 use axum::{async_trait, http::request::Parts};
 
-use crate::{AuthnUser, AuthzBackend};
+use crate::{authn::User, AuthzBackend};
 
 /// Allows the request only if the user has the specified role.
 #[derive(Debug, Clone)]
@@ -36,12 +36,12 @@ where
     async fn authorize(&self, req_parts: &Parts) -> Result<bool, Self::Error> {
         let user = req_parts
             .extensions
-            .get::<AuthnUser<U>>()
+            .get::<User<U>>()
             .expect("Is AuthnLayer enabled?");
 
         match user {
-            AuthnUser::Auth(user) => Ok(user.roles().contains(&self.role)),
-            AuthnUser::Anon => Ok(false),
+            User::Authn(user) => Ok(user.0.roles().contains(&self.role)),
+            User::Anon => Ok(false),
         }
     }
 }

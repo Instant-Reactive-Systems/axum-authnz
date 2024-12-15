@@ -41,25 +41,46 @@ where
 
 /// Represents an authenticated or anonymous user.
 #[derive(Debug, Clone)]
-pub enum AuthnUser<Data> {
+pub enum User<UserData> {
     /// Authenticated user with his own data.
-    Auth(Data),
+    Authn(AuthnUser<UserData>),
     /// Anonymous user.
     Anon,
 }
 
+/// Authenticated user and its data
+// TODO: Should data be in arc?
+#[derive(Debug, Clone)]
+pub struct AuthnUser<UserData>(pub UserData);
+
 #[async_trait]
-impl<Data, S> FromRequestParts<S> for AuthnUser<Data>
+impl<UserData, S> FromRequestParts<S> for User<UserData>
 where
-    Data: Clone + Send + Sync + 'static,
+    UserData: Clone + Send + Sync + 'static,
 {
     type Rejection = (StatusCode, &'static str);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts.extensions.get::<AuthnUser<Data>>().cloned().ok_or((
+        parts.extensions.get::<User<UserData>>().cloned().ok_or((
             StatusCode::INTERNAL_SERVER_ERROR,
             "Can't extract User. Is AuthnLayer enabled?",
         ))
+    }
+}
+
+#[async_trait]
+impl<UserData, S> FromRequestParts<S> for AuthnUser<UserData>
+where
+    UserData: Clone + Send + Sync + 'static,
+{
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<AuthnUser<UserData>>()
+            .cloned()
+            .ok_or(StatusCode::UNAUTHORIZED)
     }
 }
 
@@ -79,7 +100,7 @@ pub trait AuthnBackend: std::fmt::Debug + Clone + Send + Sync + 'static {
     async fn authenticate(
         &mut self,
         authn_proof: Self::AuthnProof,
-    ) -> Result<AuthnUser<Self::UserData>, Self::Error>;
+    ) -> Result<User<Self::UserData>, Self::Error>;
 }
 
 /// A request extension that exposes a way to interact with the [`AuthnBackend`].
@@ -176,7 +197,7 @@ where
                     Err(err) => return Ok(err.into_response()),
                 };
             } else {
-                req.extensions_mut().insert(AuthnUser::<B::UserData>::Anon);
+                req.extensions_mut().insert(User::<B::UserData>::Anon);
             }
 
             req.extensions_mut().insert(authn_extension);
