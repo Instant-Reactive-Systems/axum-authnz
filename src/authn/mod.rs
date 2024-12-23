@@ -73,14 +73,21 @@ impl<UserData, S> FromRequestParts<S> for AuthnUser<UserData>
 where
     UserData: Clone + Send + Sync + 'static,
 {
-    type Rejection = StatusCode;
+    type Rejection = (StatusCode, &'static str);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts
-            .extensions
-            .get::<AuthnUser<UserData>>()
-            .cloned()
-            .ok_or(StatusCode::UNAUTHORIZED)
+        let user = parts.extensions.get::<User<UserData>>().cloned().ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Can't extract User. Is AuthnLayer enabled?",
+        ))?;
+
+        match user {
+            User::Authn(authn_user) => Ok(authn_user),
+            User::Anon => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Can't extract User. Is AuthnLayer enabled?",
+            )),
+        }
     }
 }
 
